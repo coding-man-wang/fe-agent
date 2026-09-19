@@ -1,9 +1,9 @@
 import json
 
+from openai import AsyncOpenAI, APIStatusError, APITimeoutError, APIConnectionError
+
 from agent_core.agent.errors import LLMError
 from agent_core.agent.model import ToolCall
-from openai import AsyncOpenAI, APIStatusError
-
 from agent_core.llm.model import ChatRequest, ChatResponse
 from .base import LLM
 
@@ -41,19 +41,20 @@ class OpenAILLM(LLM):
                     ))
 
             return ChatResponse(content=response.output_text, tool_calls=tool_calls, model=self.model)
-        except APIConnectionError as e:
+        except APITimeoutError as e:
             raise LLMError("request timeout", retryable=True) from e
         except APIConnectionError as e:
             raise LLMError("connection failed", retryable=True) from e
         except APIStatusError as e:
-            code = e.status_code
+            status_code = e.status_code
             retryable = (
-                status_code in {
-                    408,
-                    409,
-                    429,
-                } or status_code >= 500
+                    status_code in {
+                408,
+                409,
+                429,
+            } or status_code >= 500
             )
-            raise LLMError("request failed", retryable=retryable, status_code=code) from e
+            print(status_code)
+            raise LLMError("request failed", retryable=retryable, status_code=status_code) from e
         except Exception as e:
             raise LLMError(str(e), retryable=False) from e
