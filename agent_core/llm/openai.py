@@ -18,10 +18,7 @@ class OpenAILLM(LLM):
     async def chat(self, request: ChatRequest) -> ChatResponse:
         try:
             input_messages = [
-                {
-                    "role": message.role,
-                    "content": message.content
-                }
+                {"role": message.role, "content": message.content}
                 for message in request.messages
             ]
 
@@ -34,13 +31,17 @@ class OpenAILLM(LLM):
             tool_calls = []
             for item in response.output:
                 if item.type == "function_call":
-                    tool_calls.append(ToolCall(
-                        id=item.call_id,
-                        name=item.name,
-                        arguments=json.loads(item.arguments),
-                    ))
+                    tool_calls.append(
+                        ToolCall(
+                            id=item.call_id,
+                            name=item.name,
+                            arguments=json.loads(item.arguments),
+                        )
+                    )
 
-            return ChatResponse(content=response.output_text, tool_calls=tool_calls, model=self.model)
+            return ChatResponse(
+                content=response.output_text, tool_calls=tool_calls, model=self.model
+            )
         except APITimeoutError as e:
             raise LLMError("request timeout", retryable=True) from e
         except APIConnectionError as e:
@@ -48,13 +49,17 @@ class OpenAILLM(LLM):
         except APIStatusError as e:
             status_code = e.status_code
             retryable = (
-                    status_code in {
-                408,
-                409,
-                429,
-            } or status_code >= 500
+                status_code
+                in {
+                    408,
+                    409,
+                    429,
+                }
+                or status_code >= 500
             )
             print(status_code)
-            raise LLMError("request failed", retryable=retryable, status_code=status_code) from e
+            raise LLMError(
+                "request failed", retryable=retryable, status_code=status_code
+            ) from e
         except Exception as e:
             raise LLMError(str(e), retryable=False) from e

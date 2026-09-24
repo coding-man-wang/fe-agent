@@ -1,7 +1,11 @@
 import json
 
 from agent_core.llm.model import ChatRequest, Message
-from agent_core.sdd.model import RequirementSpec, RequirementValidationResult, RequirementPatch
+from agent_core.sdd.model import (
+    RequirementSpec,
+    RequirementValidationResult,
+    RequirementPatch,
+)
 
 
 class RequirementClarifier:
@@ -9,10 +13,10 @@ class RequirementClarifier:
         self.llm = llm
 
     async def create_path(
-            self,
-            spec: RequirementSpec,
-            validation: RequirementValidationResult,
-            user_answer: str
+        self,
+        spec: RequirementSpec,
+        validation: RequirementValidationResult,
+        user_answer: str,
     ) -> RequirementPatch:
         schema = RequirementPatch.model_json_schema()
 
@@ -74,7 +78,7 @@ class RequirementClarifier:
                 Message(
                     role="user",
                     content=json.dumps(input_data, ensure_ascii=False, indent=2),
-                )
+                ),
             ]
         )
 

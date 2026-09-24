@@ -36,13 +36,10 @@ JSON Schema：
                     role="system",
                     content=system_prompt,
                 ),
-                Message(
-                    role="user",
-                    content=requirement
-                )
+                Message(role="user", content=requirement),
             ]
         )
 
         response = await self.llm.chat(request)
-        
+
         return RequirementSpec.model_validate_json(response.content)

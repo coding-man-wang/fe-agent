@@ -17,6 +17,7 @@ TraceEventType = Literal[
     "run_failed",
 ]
 
+
 class TraceEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid4()))
 

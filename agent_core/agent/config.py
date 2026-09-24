@@ -2,10 +2,8 @@ from pydantic import Field, BaseModel
 
 
 class AgentConfig(BaseModel):
-    max_steps:int = Field(
-        default=10,
-        ge=1,
-        description="Agent 单次运行允许的最大推理轮数"
+    max_steps: int = Field(
+        default=10, ge=1, description="Agent 单次运行允许的最大推理轮数"
     )
 
     retry_times: int = Field(

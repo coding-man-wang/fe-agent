@@ -39,16 +39,16 @@ class RetryPolicy(BaseModel):
 
 
 def is_retryable(error: Exception) -> bool:
-    return (isinstance(error, AgentError) and error.retryable)
+    return isinstance(error, AgentError) and error.retryable
 
 
 T = TypeVar("T")
 
 
 async def retry_async(
-        operation: Callable[[], Awaitable[T]],
-        policy: RetryPolicy,
-        on_retry: Callable[[int, float, Exception], None] | None = None,
+    operation: Callable[[], Awaitable[T]],
+    policy: RetryPolicy,
+    on_retry: Callable[[int, float, Exception], None] | None = None,
 ) -> T:
     retry_count = 0
 
@@ -65,7 +65,7 @@ async def retry_async(
             retry_count += 1
 
             delay = policy.get_delay(retry_number=retry_count)
-            
+
             if on_retry is not None:
                 on_retry(retry_count, delay, e)
 

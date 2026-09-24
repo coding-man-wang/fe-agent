@@ -9,7 +9,9 @@ class TechnicalSpecGenerator:
     def __init__(self, llm: LLM):
         self.llm = llm
 
-    async def generate(self, requirement: RequirementSpec, project_context: ProjectContext) -> TechnicalSpec:
+    async def generate(
+        self, requirement: RequirementSpec, project_context: ProjectContext
+    ) -> TechnicalSpec:
         schema = TechnicalSpec.model_json_schema()
 
         system_prompt = f"""
@@ -76,14 +78,8 @@ class TechnicalSpecGenerator:
 
         request = ChatRequest(
             messages=[
-                Message(
-                    role="system",
-                    content=system_prompt
-                ),
-                Message(
-                    role="user",
-                    content=input_data
-                )
+                Message(role="system", content=system_prompt),
+                Message(role="user", content=input_data),
             ]
         )
 

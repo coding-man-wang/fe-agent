@@ -34,64 +34,37 @@ async def test_requirement_not_ready():
     spec = RequirementSpec(
         title="用户导出",
         summary="支持用户列表导出",
-        goals=[
-            "支持导出用户数据"
-        ],
-        acceptance_criteria=[
-            "用户可以完成数据导出"
-        ],
-        open_questions=[
-            "导出格式是什么？"
-        ],
+        goals=["支持导出用户数据"],
+        acceptance_criteria=["用户可以完成数据导出"],
+        open_questions=["导出格式是什么？"],
     )
 
-    validator = RequireValidator(
-        llm=FakeLLM()
-    )
+    validator = RequireValidator(llm=FakeLLM())
 
-    result = await validator.validate(
-        spec
-    )
+    result = await validator.validate(spec)
 
     assert result.is_ready is False
 
-    assert len(
-        result.clarification_questions
-    ) == 1
+    assert len(result.clarification_questions) == 1
 
-    assert (
-            result.issues[0].severity
-            == "blocking"
-    )
+    assert result.issues[0].severity == "blocking"
 
 
 def test_patch_does_not_modify_original():
     original = RequirementSpec(
         title="用户列表",
         summary="用户列表页面",
-        goals=[
-            "展示用户"
-        ],
-        open_questions=[
-            "是否需要分页？"
-        ],
+        goals=["展示用户"],
+        open_questions=["是否需要分页？"],
     )
 
-    patch = RequirementPatch(
-        open_questions=StringListPatch(
-            remove=[
-                "是否需要分页？"
-            ]
-        )
-    )
+    patch = RequirementPatch(open_questions=StringListPatch(remove=["是否需要分页？"]))
 
     updated = apply_requirement_patch(
         original,
         patch,
     )
 
-    assert original.open_questions == [
-        "是否需要分页？"
-    ]
+    assert original.open_questions == ["是否需要分页？"]
 
     assert updated.open_questions == []

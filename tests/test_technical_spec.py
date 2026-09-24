@@ -3,7 +3,8 @@ import pytest
 from agent_core.llm.base import LLM
 from agent_core.llm.model import ChatResponse
 from agent_core.sdd.model import (
-    ProjectContext, TechnicalSpec,
+    ProjectContext,
+    TechnicalSpec,
 )
 from agent_core.sdd.technical import (
     TechnicalSpecGenerator,
@@ -30,69 +31,41 @@ def test_project_context():
 
     assert context.framework == "Vue3"
 
-    assert "Table" in (
-        context.available_components
-    )
+    assert "Table" in (context.available_components)
 
 
 def test_technical_spec():
     data = {
         "summary": "实现用户列表页面",
-
-        "solution_approach": [
-            "新增用户列表页面"
-        ],
-
-        "affected_modules": [
-            "用户管理"
-        ],
-
-        "reuse_plan": [
-            "复用 Table"
-        ],
-
-        "data_flow": [
-            "搜索条件 -> API -> Table"
-        ],
-
+        "solution_approach": ["新增用户列表页面"],
+        "affected_modules": ["用户管理"],
+        "reuse_plan": ["复用 Table"],
+        "data_flow": ["搜索条件 -> API -> Table"],
         "technical_decisions": [
             {
                 "topic": "状态管理",
                 "decision": "使用局部状态",
-                "rationale": "不需要跨页面共享"
+                "rationale": "不需要跨页面共享",
             }
         ],
-
-        "testing_strategy": [
-            "使用 Playwright 验证搜索"
-        ],
-
+        "testing_strategy": ["使用 Playwright 验证搜索"],
         "risks": [],
-
         "assumptions": [],
-
-        "open_questions": []
+        "open_questions": [],
     }
 
-    spec = TechnicalSpec.model_validate(
-        data
-    )
+    spec = TechnicalSpec.model_validate(data)
 
-    assert spec.summary == (
-        "实现用户列表页面"
-    )
+    assert spec.summary == ("实现用户列表页面")
 
-    assert (
-            spec.technical_decisions[0].topic
-            == "状态管理"
-    )
+    assert spec.technical_decisions[0].topic == "状态管理"
 
 
 class FakeTechnicalLLM(LLM):
 
     async def chat(
-            self,
-            request,
+        self,
+        request,
     ):
         return ChatResponse(
             content="""
@@ -144,20 +117,13 @@ class FakeTechnicalLLM(LLM):
 
 @pytest.mark.asyncio
 async def test_generate_technical_spec():
-    generator = TechnicalSpecGenerator(
-        llm=FakeTechnicalLLM()
-    )
+    generator = TechnicalSpecGenerator(llm=FakeTechnicalLLM())
 
     technical_spec = await generator.generate(
         requirement=requirement,
         project_context=project_context,
     )
 
-    assert (
-            technical_spec.summary
-            == "实现用户列表页面"
-    )
+    assert technical_spec.summary == "实现用户列表页面"
 
-    assert len(
-        technical_spec.technical_decisions
-    ) == 1
+    assert len(technical_spec.technical_decisions) == 1

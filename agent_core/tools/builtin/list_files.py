@@ -8,10 +8,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 
 class ListFileInput(BaseModel):
-    path: str = Field(
-        default=".",
-        description="需要查看的目录路径"
-    )
+    path: str = Field(default=".", description="需要查看的目录路径")
+
 
 class ListFileTool(Tool):
     @property
@@ -43,10 +41,12 @@ class ListFileTool(Tool):
 
             items = []
             for item in directory.iterdir():
-                items.append({
-                    "name": item.name,
-                    "type": "directory" if item.is_dir() else "file",
-                })
+                items.append(
+                    {
+                        "name": item.name,
+                        "type": "directory" if item.is_dir() else "file",
+                    }
+                )
 
             return {
                 "success": True,
@@ -55,4 +55,3 @@ class ListFileTool(Tool):
             }
         except Exception as e:
             raise ToolExecutionError(self.name, str(e)) from e
-

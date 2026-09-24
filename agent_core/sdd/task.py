@@ -2,7 +2,13 @@ import json
 
 from agent_core.llm.base import LLM
 from agent_core.llm.model import Message, ChatRequest
-from agent_core.sdd.model import RequirementSpec, TaskPlan, TechnicalSpec, ImplementationPlan, ProjectContext
+from agent_core.sdd.model import (
+    RequirementSpec,
+    TaskPlan,
+    TechnicalSpec,
+    ImplementationPlan,
+    ProjectContext,
+)
 
 
 class TaskPlanner:
@@ -10,11 +16,11 @@ class TaskPlanner:
         self.llm = llm
 
     async def generate(
-            self,
-            requirement: RequirementSpec,
-            technical_spec: TechnicalSpec,
-            implementation_plan: ImplementationPlan,
-            project_context: ProjectContext,
+        self,
+        requirement: RequirementSpec,
+        technical_spec: TechnicalSpec,
+        implementation_plan: ImplementationPlan,
+        project_context: ProjectContext,
     ) -> TaskPlan:
         schema = TaskPlan.model_json_schema()
 
@@ -114,12 +120,8 @@ class TaskPlanner:
         input_data = {
             "requirement": requirement.model_dump(),
             "technical_spec": technical_spec.model_dump(),
-            "implementation_plan": (
-                implementation_plan.model_dump()
-            ),
-            "project_context": (
-                project_context.model_dump()
-            ),
+            "implementation_plan": (implementation_plan.model_dump()),
+            "project_context": (project_context.model_dump()),
         }
 
         request = ChatRequest(
@@ -139,10 +141,6 @@ class TaskPlanner:
             ]
         )
 
-        response = await self.llm.chat(
-            request
-        )
+        response = await self.llm.chat(request)
 
-        return TaskPlan.model_validate_json(
-            response.content
-        )
+        return TaskPlan.model_validate_json(response.content)

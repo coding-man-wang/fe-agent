@@ -3,6 +3,7 @@ import asyncio
 from agent_core.tools.builtin.list_files import ListFileTool
 from agent_core.tools.registry import ToolRegistry
 
+
 async def main():
     registry = ToolRegistry()
 
@@ -12,11 +13,10 @@ async def main():
 
     print(list_file_tool.to_schema())
 
-    result = await list_file_tool.execute({
-        "xxx": "."
-    })
+    result = await list_file_tool.execute({"xxx": "."})
 
     print(result)
+
 
 if __name__ == "__main__":
 

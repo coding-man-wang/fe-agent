@@ -1,15 +1,24 @@
 import json
 
 from agent_core.llm.model import ChatRequest, Message
-from agent_core.sdd.model import RequirementSpec, TechnicalSpec, ProjectContext, ImplementationPlan
+from agent_core.sdd.model import (
+    RequirementSpec,
+    TechnicalSpec,
+    ProjectContext,
+    ImplementationPlan,
+)
 
 
 class ImplementationPlanGenerator:
     def __init__(self, llm):
         self.llm = llm
 
-    async def generate(self, requirement: RequirementSpec, technical_spec: TechnicalSpec,
-                       project_context: ProjectContext) -> ImplementationPlan:
+    async def generate(
+        self,
+        requirement: RequirementSpec,
+        technical_spec: TechnicalSpec,
+        project_context: ProjectContext,
+    ) -> ImplementationPlan:
         schema = ImplementationPlan.model_json_schema()
 
         system_prompt = f"""
@@ -73,15 +82,9 @@ class ImplementationPlanGenerator:
         """
 
         input_data = {
-            "requirement": (
-                requirement.model_dump()
-            ),
-            "technical_spec": (
-                technical_spec.model_dump()
-            ),
-            "project_context": (
-                project_context.model_dump()
-            ),
+            "requirement": (requirement.model_dump()),
+            "technical_spec": (technical_spec.model_dump()),
+            "project_context": (project_context.model_dump()),
         }
 
         request = ChatRequest(
@@ -101,13 +104,6 @@ class ImplementationPlanGenerator:
             ]
         )
 
-        response = await self.llm.chat(
-            request
-        )
+        response = await self.llm.chat(request)
 
-        return (
-            ImplementationPlan
-            .model_validate_json(
-                response.content
-            )
-        )
+        return ImplementationPlan.model_validate_json(response.content)

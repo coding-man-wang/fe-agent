@@ -65,7 +65,7 @@ class RequireValidator:
                 Message(
                     role="user",
                     content=user_content,
-                )
+                ),
             ]
         )
 

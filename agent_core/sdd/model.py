@@ -9,33 +9,27 @@ class RequirementSpec(BaseModel):
     summary: str = Field(description="对用户原始需求的结构化总结")
 
     goals: list[str] = Field(
-        default_factory=list,
-        description="本次需求需要实现的核心目标"
+        default_factory=list, description="本次需求需要实现的核心目标"
     )
 
     non_goals: list[str] = Field(
-        default_factory=list,
-        description="明确本次需求不处理的内容"
+        default_factory=list, description="明确本次需求不处理的内容"
     )
 
     acceptance_criteria: list[str] = Field(
-        default_factory=list,
-        description="判断需求是否完成的验收标准"
+        default_factory=list, description="判断需求是否完成的验收标准"
     )
 
     constraints: list[str] = Field(
-        default_factory=list,
-        description="开发过程中必须遵守的限制和约束"
+        default_factory=list, description="开发过程中必须遵守的限制和约束"
     )
 
     assumptions: list[str] = Field(
-        default_factory=list,
-        description="当前分析过程中暂时采用的假设"
+        default_factory=list, description="当前分析过程中暂时采用的假设"
     )
 
     open_questions: list[str] = Field(
-        default_factory=list,
-        description="由于信息不足，目前仍需要确认的问题"
+        default_factory=list, description="由于信息不足，目前仍需要确认的问题"
     )
 
 
@@ -45,13 +39,7 @@ class RequirementIssue(BaseModel):
     # conflict 需求冲突
     # unverifiable 无法验收
     # scope 范围问题
-    category: Literal[
-        "missing",
-        "ambiguous",
-        "conflict",
-        "unverifiable",
-        "scope"
-    ]
+    category: Literal["missing", "ambiguous", "conflict", "unverifiable", "scope"]
 
     severity: Literal[
         "warning",
@@ -77,26 +65,20 @@ class RequirementValidationResult(BaseModel):
 
 
 class StringListPatch(BaseModel):
-    add: list[str] = Field(
-        default_factory=list,
-        description="本次需要新增的内容"
-    )
+    add: list[str] = Field(default_factory=list, description="本次需要新增的内容")
 
     remove: list[str] = Field(
-        default_factory=list,
-        description="本次需要删除的原有内容"
+        default_factory=list, description="本次需要删除的原有内容"
     )
 
 
 class RequirementPatch(BaseModel):
     title: str | None = Field(
-        default=None,
-        description="如果需求标题需要修改，填写新的标题，否则为 null"
+        default=None, description="如果需求标题需要修改，填写新的标题，否则为 null"
     )
 
     summary: str = Field(
-        default=None,
-        description="如果需求总结需要修改，填写新的总结，否则为 null"
+        default=None, description="如果需求总结需要修改，填写新的总结，否则为 null"
     )
 
     goals: StringListPatch = Field(
@@ -125,36 +107,26 @@ class RequirementPatch(BaseModel):
 
 
 class ProjectContext(BaseModel):
-    project_name: str = Field(
-        description="项目名称"
-    )
+    project_name: str = Field(description="项目名称")
 
-    framework: str = Field(
-        description="当前项目使用的前端框架，例如 Vue3、React"
-    )
+    framework: str = Field(description="当前项目使用的前端框架，例如 Vue3、React")
 
-    language: str = Field(
-        description="主要开发语言，例如 TypeScript"
-    )
+    language: str = Field(description="主要开发语言，例如 TypeScript")
 
     build_tool: str | None = Field(
-        default=None,
-        description="项目构建工具，例如 Vite、Webpack"
+        default=None, description="项目构建工具，例如 Vite、Webpack"
     )
 
     package_manager: str | None = Field(
-        default=None,
-        description="包管理工具，例如 pnpm、npm、yarn"
+        default=None, description="包管理工具，例如 pnpm、npm、yarn"
     )
 
     state_management: str | None = Field(
-        default=None,
-        description="项目使用的状态管理方案，例如 Pinia"
+        default=None, description="项目使用的状态管理方案，例如 Pinia"
     )
 
     test_stack: list[str] = Field(
-        default_factory=list,
-        description="项目当前测试技术栈"
+        default_factory=list, description="项目当前测试技术栈"
     )
 
     available_components: list[str] = Field(
@@ -163,39 +135,28 @@ class ProjectContext(BaseModel):
     )
 
     engineering_rules: list[str] = Field(
-        default_factory=list,
-        description="当前项目必须遵守的工程规范"
+        default_factory=list, description="当前项目必须遵守的工程规范"
     )
 
     directory_summary: list[str] = Field(
-        default_factory=list,
-        description="与当前开发相关的目录结构摘要"
+        default_factory=list, description="与当前开发相关的目录结构摘要"
     )
 
     relevant_files: list[str] = Field(
-        default_factory=list,
-        description="已经确定与当前需求相关的代码文件"
+        default_factory=list, description="已经确定与当前需求相关的代码文件"
     )
 
 
 class TechnicalDecision(BaseModel):
-    topic: str = Field(
-        description="本次技术决策关注的问题"
-    )
+    topic: str = Field(description="本次技术决策关注的问题")
 
-    decision: str = Field(
-        description="最终采用的技术方案"
-    )
+    decision: str = Field(description="最终采用的技术方案")
 
-    rationale: str = Field(
-        description="为什么采用这个方案"
-    )
+    rationale: str = Field(description="为什么采用这个方案")
 
 
 class TechnicalSpec(BaseModel):
-    summary: str = Field(
-        description="本次技术方案整体摘要"
-    )
+    summary: str = Field(description="本次技术方案整体摘要")
 
     solution_approach: list[str] = Field(
         default_factory=list,
@@ -249,13 +210,9 @@ class ImplementationStep(BaseModel):
         description="实施步骤顺序，从 1 开始",
     )
 
-    title: str = Field(
-        description="当前实施步骤的简短标题"
-    )
+    title: str = Field(description="当前实施步骤的简短标题")
 
-    goal: str = Field(
-        description="当前步骤希望达成的目标"
-    )
+    goal: str = Field(description="当前步骤希望达成的目标")
 
     actions: list[str] = Field(
         default_factory=list,
@@ -274,9 +231,7 @@ class ImplementationStep(BaseModel):
 
 
 class ImplementationPlan(BaseModel):
-    summary: str = Field(
-        description="整个实施计划的总体说明"
-    )
+    summary: str = Field(description="整个实施计划的总体说明")
 
     preconditions: list[str] = Field(
         default_factory=list,
@@ -313,25 +268,16 @@ TaskType = Literal[
 
 
 class TaskDefinition(BaseModel):
-    task_id: str = Field(
-        description="任务唯一编号，例如 TASK-001"
-    )
+    task_id: str = Field(description="任务唯一编号，例如 TASK-001")
 
-    task_type: TaskType = Field(
-        description="任务类型"
-    )
+    task_type: TaskType = Field(description="任务类型")
 
-    title: str = Field(
-        description="任务标题"
-    )
+    title: str = Field(description="任务标题")
 
-    objective: str = Field(
-        description="这个任务完成后应该达成什么目标"
-    )
+    objective: str = Field(description="这个任务完成后应该达成什么目标")
 
     source_step_order: int = Field(
-        ge=1,
-        description="这个任务来源于 ImplementationPlan 的第几步"
+        ge=1, description="这个任务来源于 ImplementationPlan 的第几步"
     )
 
     depends_on: list[str] = Field(
@@ -366,13 +312,10 @@ class TaskDefinition(BaseModel):
 
 
 class TaskPlan(BaseModel):
-    summary: str = Field(
-        description="整个 Task Plan 的总体说明"
-    )
+    summary: str = Field(description="整个 Task Plan 的总体说明")
 
     tasks: list[TaskDefinition] = Field(
-        default_factory=list,
-        description="所有可执行任务"
+        default_factory=list, description="所有可执行任务"
     )
 
     completion_criteria: list[str] = Field(

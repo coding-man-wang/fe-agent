@@ -30,40 +30,24 @@ async def main():
     #
     # await agent.run("请查看当前项目有哪些文件")
 
-    analyzer = RequirementAnalyzer(
-        llm=llm
-    )
+    analyzer = RequirementAnalyzer(llm=llm)
 
-    spec = await analyzer.analyze(
-        """
+    spec = await analyzer.analyze("""
         给现有 Vue3 管理后台增加用户列表页面。
 
         要求：
         - 支持用户名搜索
         - 支持分页
         - 必须使用公司的 Table 组件
-        """
-    )
+        """)
 
-    validator = RequireValidator(
-        llm=llm
-    )
+    validator = RequireValidator(llm=llm)
 
-    validation = await validator.validate(
-        spec
-    )
+    validation = await validator.validate(spec)
     print(spec)
-    print(
-        spec.model_dump_json(
-            indent=2
-        )
-    )
+    print(spec.model_dump_json(indent=2))
 
-    print(
-        validation.model_dump_json(
-            indent=2
-        )
-    )
+    print(validation.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

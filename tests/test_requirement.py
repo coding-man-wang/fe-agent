@@ -26,18 +26,13 @@ def test_requirement_spec():
         ],
     }
 
-    spec = RequirementSpec.model_validate(
-        data
-    )
+    spec = RequirementSpec.model_validate(data)
 
     assert spec.title == "用户列表"
 
     assert len(spec.goals) == 2
 
-    assert (
-            spec.constraints[0]
-            == "使用 Vue3"
-    )
+    assert spec.constraints[0] == "使用 Vue3"
 
 
 def test_requirement_from_json():
@@ -56,9 +51,6 @@ def test_requirement_from_json():
     }
     """
 
-    spec = (
-        RequirementSpec
-        .model_validate_json(content)
-    )
+    spec = RequirementSpec.model_validate_json(content)
 
     assert spec.title == "用户列表"

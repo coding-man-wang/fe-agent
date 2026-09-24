@@ -34,6 +34,7 @@ async def test_retry_success_first_time():
     assert result == "success"
     assert call_count == 1
 
+
 @pytest.mark.asyncio
 async def test_retry_then_success():
 
@@ -68,6 +69,7 @@ async def test_retry_then_success():
 
     assert call_count == 3
 
+
 @pytest.mark.asyncio
 async def test_non_retryable_error():
 
@@ -98,6 +100,7 @@ async def test_non_retryable_error():
         )
 
     assert call_count == 1
+
 
 @pytest.mark.asyncio
 async def test_retry_exhausted():

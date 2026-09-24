@@ -3,7 +3,13 @@ import pytest
 from agent_core.llm.model import (
     ChatResponse,
 )
-from agent_core.sdd.model import RequirementSpec, ProjectContext, TechnicalSpec, ImplementationPlan, TaskPlan
+from agent_core.sdd.model import (
+    RequirementSpec,
+    ProjectContext,
+    TechnicalSpec,
+    ImplementationPlan,
+    TaskPlan,
+)
 from agent_core.sdd.task import TaskPlanner
 from agent_core.sdd.task_validation import validate_task_plan, has_dependency_cycle
 
@@ -11,8 +17,8 @@ from agent_core.sdd.task_validation import validate_task_plan, has_dependency_cy
 class FakeTaskLLM:
 
     async def chat(
-            self,
-            request,
+        self,
+        request,
     ):
         return ChatResponse(
             content="""
@@ -223,33 +229,24 @@ class FakeTaskLLM:
 def create_requirement() -> RequirementSpec:
     return RequirementSpec(
         title="用户列表功能",
-
         summary="实现用户列表页面",
-
         goals=[
             "展示用户列表",
             "支持搜索",
             "支持状态筛选",
             "支持分页",
         ],
-
         non_goals=[
             "不实现用户删除",
         ],
-
         acceptance_criteria=[
             "页面能够展示用户列表",
             "用户名搜索结果正确",
             "状态筛选结果正确",
             "分页切换结果正确",
         ],
-
-        constraints=[
-            "使用 Vue3"
-        ],
-
+        constraints=["使用 Vue3"],
         assumptions=[],
-
         open_questions=[],
     )
 
@@ -259,32 +256,24 @@ def create_project_context() -> ProjectContext:
         project_name="admin-web",
         framework="Vue3",
         language="TypeScript",
-
         build_tool="Vite",
         package_manager="pnpm",
         state_management="Pinia",
-
         test_stack=[
             "Vitest",
             "Playwright",
         ],
-
         available_components=[
             "Table",
             "SearchForm",
             "Pagination",
         ],
-
-        engineering_rules=[
-            "API 请求统一放在 src/api"
-        ],
-
+        engineering_rules=["API 请求统一放在 src/api"],
         directory_summary=[
             "src/api",
             "src/views",
             "src/router",
         ],
-
         relevant_files=[],
     )
 
@@ -292,39 +281,28 @@ def create_project_context() -> ProjectContext:
 def create_technical_spec() -> TechnicalSpec:
     return TechnicalSpec(
         summary="实现用户列表",
-
         solution_approach=[
             "增加 API 封装",
             "增加用户列表页面",
             "增加搜索、筛选和分页",
         ],
-
         affected_modules=[
             "API",
             "用户管理页面",
         ],
-
         reuse_plan=[
             "Table",
             "SearchForm",
             "Pagination",
         ],
-
-        data_flow=[
-            "查询条件 -> API -> Table"
-        ],
-
+        data_flow=["查询条件 -> API -> Table"],
         technical_decisions=[],
-
         testing_strategy=[
             "Vitest",
             "Playwright",
         ],
-
         risks=[],
-
         assumptions=[],
-
         open_questions=[],
     )
 
@@ -332,11 +310,7 @@ def create_technical_spec() -> TechnicalSpec:
 def create_implementation_plan() -> ImplementationPlan:
     return ImplementationPlan(
         summary="实现用户列表",
-
-        preconditions=[
-            "确认用户 API 契约"
-        ],
-
+        preconditions=["确认用户 API 契约"],
         steps=[
             {
                 "order": 1,
@@ -346,27 +320,19 @@ def create_implementation_plan() -> ImplementationPlan:
                     "确认 API",
                     "增加 API 封装",
                 ],
-                "affected_modules": [
-                    "src/api"
-                ],
-                "verification": [
-                    "API 可正常使用"
-                ],
+                "affected_modules": ["src/api"],
+                "verification": ["API 可正常使用"],
             },
             {
                 "order": 2,
                 "title": "实现页面",
                 "goal": "展示用户列表",
-                "actions": [
-                    "新增用户列表页面"
-                ],
+                "actions": ["新增用户列表页面"],
                 "affected_modules": [
                     "src/views",
                     "src/router",
                 ],
-                "verification": [
-                    "页面正常展示"
-                ],
+                "verification": ["页面正常展示"],
             },
             {
                 "order": 3,
@@ -377,12 +343,8 @@ def create_implementation_plan() -> ImplementationPlan:
                     "状态筛选",
                     "分页",
                 ],
-                "affected_modules": [
-                    "src/views"
-                ],
-                "verification": [
-                    "查询功能正常"
-                ],
+                "affected_modules": ["src/views"],
+                "verification": ["查询功能正常"],
             },
             {
                 "order": 4,
@@ -394,21 +356,12 @@ def create_implementation_plan() -> ImplementationPlan:
                     "lint",
                     "typecheck",
                 ],
-                "affected_modules": [
-                    "tests"
-                ],
-                "verification": [
-                    "全部测试通过"
-                ],
+                "affected_modules": ["tests"],
+                "verification": ["全部测试通过"],
             },
         ],
-
-        completion_criteria=[
-            "Acceptance Criteria 全部满足"
-        ],
-
+        completion_criteria=["Acceptance Criteria 全部满足"],
         risks=[],
-
         open_questions=[],
     )
 
@@ -417,21 +370,13 @@ def create_implementation_plan() -> ImplementationPlan:
 async def test_generate_task_plan():
     requirement = create_requirement()
 
-    technical_spec = (
-        create_technical_spec()
-    )
+    technical_spec = create_technical_spec()
 
-    implementation_plan = (
-        create_implementation_plan()
-    )
+    implementation_plan = create_implementation_plan()
 
-    project_context = (
-        create_project_context()
-    )
+    project_context = create_project_context()
 
-    planner = TaskPlanner(
-        llm=FakeTaskLLM()
-    )
+    planner = TaskPlanner(llm=FakeTaskLLM())
 
     task_plan = await planner.generate(
         requirement=requirement,
@@ -447,28 +392,18 @@ async def test_generate_task_plan():
 
     assert len(task_plan.tasks) == 5
 
-    assert (
-            task_plan.tasks[0].task_id
-            == "TASK-001"
-    )
+    assert task_plan.tasks[0].task_id == "TASK-001"
 
-    assert (
-            task_plan.tasks[1].depends_on
-            == ["TASK-001"]
-    )
+    assert task_plan.tasks[1].depends_on == ["TASK-001"]
 
 
 async def create_task_plan() -> TaskPlan:
-    planner = TaskPlanner(
-        llm=FakeTaskLLM()
-    )
+    planner = TaskPlanner(llm=FakeTaskLLM())
 
     return await planner.generate(
         requirement=create_requirement(),
         technical_spec=create_technical_spec(),
-        implementation_plan=(
-            create_implementation_plan()
-        ),
+        implementation_plan=(create_implementation_plan()),
         project_context=create_project_context(),
     )
 
@@ -480,9 +415,7 @@ async def test_task_plan_validation_success():
     result = validate_task_plan(
         plan=task_plan,
         requirement=create_requirement(),
-        implementation_plan=(
-            create_implementation_plan()
-        ),
+        implementation_plan=(create_implementation_plan()),
     )
 
     assert result.is_valid is True
@@ -494,56 +427,35 @@ async def test_task_plan_validation_success():
 async def test_task_plan_missing_dependency():
     task_plan = await create_task_plan()
 
-    task_plan.tasks[0].depends_on = [
-        "TASK-999"
-    ]
+    task_plan.tasks[0].depends_on = ["TASK-999"]
 
     result = validate_task_plan(
         plan=task_plan,
         requirement=create_requirement(),
-        implementation_plan=(
-            create_implementation_plan()
-        ),
+        implementation_plan=(create_implementation_plan()),
     )
 
     assert result.is_valid is False
 
-    assert any(
-        "TASK-999" in error
-        for error in result.errors
-    )
+    assert any("TASK-999" in error for error in result.errors)
 
 
 @pytest.mark.asyncio
 async def test_task_plan_cycle():
     task_plan = await create_task_plan()
 
-    task_plan.tasks[0].depends_on = [
-        "TASK-002"
-    ]
+    task_plan.tasks[0].depends_on = ["TASK-002"]
 
-    task_plan.tasks[1].depends_on = [
-        "TASK-001"
-    ]
+    task_plan.tasks[1].depends_on = ["TASK-001"]
 
-    assert (
-            has_dependency_cycle(
-                task_plan
-            )
-            is True
-    )
+    assert has_dependency_cycle(task_plan) is True
 
     result = validate_task_plan(
         plan=task_plan,
         requirement=create_requirement(),
-        implementation_plan=(
-            create_implementation_plan()
-        ),
+        implementation_plan=(create_implementation_plan()),
     )
 
     assert result.is_valid is False
 
-    assert (
-            "TaskPlan 中存在循环依赖"
-            in result.errors
-    )
+    assert "TaskPlan 中存在循环依赖" in result.errors

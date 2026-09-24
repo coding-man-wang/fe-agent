@@ -13,6 +13,7 @@ def test_agent_state_default():
 
     assert state.messages == []
 
+
 def test_agent_state_isolated():
 
     state1 = AgentState()
@@ -20,7 +21,4 @@ def test_agent_state_isolated():
 
     assert state1.run_id != state2.run_id
 
-    assert (
-        state1.messages
-        is not state2.messages
-    )
+    assert state1.messages is not state2.messages

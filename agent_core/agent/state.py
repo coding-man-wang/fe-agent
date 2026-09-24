@@ -9,11 +9,11 @@ from agent_core.llm.model import Message
 
 
 class AgentState(BaseModel):
-    run_id:str = Field(default_factory=lambda: str(uuid4()))
+    run_id: str = Field(default_factory=lambda: str(uuid4()))
 
     status: Literal["create", "running", "completed", "failed"] = "created"
 
-    step:int = 0
+    step: int = 0
 
     messages: list[Message] = Field(default_factory=list)
 
@@ -25,8 +25,11 @@ class AgentState(BaseModel):
 
     trace: list[TraceEvent] = Field(default_factory=list)
 
-    def add_trace(self, event_type: TraceEventType, *, data: dict[str, Any] | None = None) -> None:
-        event = TraceEvent(event_type=event_type, step=self.step, run_id=self.run_id, data=data or {})
+    def add_trace(
+        self, event_type: TraceEventType, *, data: dict[str, Any] | None = None
+    ) -> None:
+        event = TraceEvent(
+            event_type=event_type, step=self.step, run_id=self.run_id, data=data or {}
+        )
 
         self.trace.append(event)
-

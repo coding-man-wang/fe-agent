@@ -18,15 +18,8 @@ async def main():
     tool = ListFileTool()
     print(tool.to_schema())
     request = ChatRequest(
-        messages=[
-            Message(
-                role="user",
-                content="帮我查看当前目录有哪些文件"
-            )
-        ],
-        tools=[
-            tool.to_schema()
-        ]
+        messages=[Message(role="user", content="帮我查看当前目录有哪些文件")],
+        tools=[tool.to_schema()],
     )
 
     response = await llm.chat(request)
