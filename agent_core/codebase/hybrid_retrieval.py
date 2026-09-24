@@ -9,11 +9,11 @@ from agent_core.codebase.model import (
 class HybridRetriever:
 
     def __init__(
-            self,
-            *,
-            rrf_k: int = 60,
-            lexical_weight: float = 1.0,
-            semantic_weight: float = 1.0,
+        self,
+        *,
+        rrf_k: int = 60,
+        lexical_weight: float = 1.0,
+        semantic_weight: float = 1.0,
     ) -> None:
         if rrf_k < 1:
             raise ValueError("rrf_k 必须 >= 1")
@@ -28,11 +28,11 @@ class HybridRetriever:
         self.semantic_weight = semantic_weight
 
     def fuse(
-            self,
-            *,
-            query: str,
-            lexical: ExactSearchResponse,
-            semantic: SemanticSearchResponse,
+        self,
+        *,
+        query: str,
+        lexical: ExactSearchResponse,
+        semantic: SemanticSearchResponse,
     ) -> HybridSearchResponse:
         candidates: dict[
             str,
@@ -75,17 +75,17 @@ class HybridRetriever:
         )
 
     def _add_lexical_candidates(
-            self,
-            *,
-            candidates: dict[
-                str,
-                HybridFileCandidate,
-            ],
-            response: ExactSearchResponse,
+        self,
+        *,
+        candidates: dict[
+            str,
+            HybridFileCandidate,
+        ],
+        response: ExactSearchResponse,
     ) -> None:
         for rank, result in enumerate(
-                response.results,
-                start=1,
+            response.results,
+            start=1,
         ):
 
             candidate = candidates.get(result.relative_path)
@@ -104,13 +104,13 @@ class HybridRetriever:
             candidate.reasons.append(f"Lexical Retrieval rank={rank}")
 
     def _add_semantic_candidates(
-            self,
-            *,
-            candidates: dict[
-                str,
-                HybridFileCandidate,
-            ],
-            response: SemanticSearchResponse,
+        self,
+        *,
+        candidates: dict[
+            str,
+            HybridFileCandidate,
+        ],
+        response: SemanticSearchResponse,
     ) -> None:
 
         seen_files: set[str] = set()
