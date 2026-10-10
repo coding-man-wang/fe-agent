@@ -25,8 +25,8 @@ def test_orthogonal_vectors():
 
 def test_vector_dimension_mismatch():
     with pytest.raises(
-            ValueError,
-            match="向量维度必须一致",
+        ValueError,
+        match="向量维度必须一致",
     ):
         cosine_similarity(
             [1.0],
