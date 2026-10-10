@@ -44,6 +44,23 @@ class CodeContextItem(BaseModel):
     content_chars: int = Field(ge=0)
 
 
+class ContextBudgetConfig(BaseModel):
+    max_files: int = Field(
+        default=6,
+        ge=1,
+    )
+
+    max_total_chars: int = Field(
+        default=30_000,
+        ge=1,
+    )
+
+    max_chars_per_file: int = Field(
+        default=8_000,
+        ge=1,
+    )
+
+
 class ContextBudgetUsage(BaseModel):
     max_files: int = Field(ge=1)
 

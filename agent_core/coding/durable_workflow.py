@@ -1,5 +1,3 @@
-from typing import Protocol
-
 from agent_core.coding.checkpoint import (
     AnalysisCheckpointStore,
 )
@@ -7,45 +5,19 @@ from agent_core.coding.handoff import (
     AnalysisArtifactStore,
     calculate_messages_hash,
 )
-from agent_core.coding.model import (
-    ReadOnlyCodingResult,
-)
 from agent_core.coding.orchestration_model import (
     TaskAnalysisRecord,
 )
 from agent_core.coding.orchestrator import (
     ReadOnlyCodingOrchestrator,
 )
-from agent_core.context.model import (
-    RenderedContext,
-    TaskContextBundle,
+from agent_core.coding.protocols import (
+    ContextFactory,
+    DurableCodingAnalyzer,
 )
 from agent_core.sdd.model import (
     TaskDefinition,
 )
-
-
-class DurableContextFactory(Protocol):
-
-    async def build(
-        self,
-        task: TaskDefinition,
-    ) -> TaskContextBundle: ...
-
-
-class PreparedCodingAnalyzer(Protocol):
-
-    def prepare_messages(
-        self,
-        bundle: TaskContextBundle,
-    ) -> RenderedContext: ...
-
-    async def analyze_prepared(
-        self,
-        *,
-        bundle: TaskContextBundle,
-        messages: RenderedContext,
-    ) -> ReadOnlyCodingResult: ...
 
 
 class DurableReadOnlyWorkflow:
@@ -53,8 +25,8 @@ class DurableReadOnlyWorkflow:
     def __init__(
         self,
         *,
-        context_factory: DurableContextFactory,
-        analyzer: PreparedCodingAnalyzer,
+        context_factory: ContextFactory,
+        analyzer: DurableCodingAnalyzer,
         checkpoint_store: AnalysisCheckpointStore,
         artifact_store: AnalysisArtifactStore,
     ) -> None:

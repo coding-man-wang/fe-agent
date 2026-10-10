@@ -28,7 +28,7 @@ from agent_core.sdd.model import (
 
 
 def create_repository(
-        root: Path,
+    root: Path,
 ) -> None:
     api = root / "src" / "api"
     api.mkdir(parents=True)
@@ -90,10 +90,10 @@ class FakeSemanticSearcher:
         self.queries: list[str] = []
 
     async def search(
-            self,
-            query: str,
-            *,
-            top_k: int = 5,
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
     ) -> SemanticSearchResponse:
 
         self.queries.append(query)
@@ -127,7 +127,7 @@ class FakeSemanticSearcher:
 
 @pytest.mark.asyncio
 async def test_task_retrieval_selects_relevant_file(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_repository(tmp_path)
 

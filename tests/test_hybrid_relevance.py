@@ -16,7 +16,7 @@ from agent_core.sdd.model import (
 
 
 def create_test_repository(
-        root: Path,
+    root: Path,
 ) -> None:
     src = root / "src"
     src.mkdir()
@@ -77,9 +77,9 @@ def create_task() -> TaskDefinition:
 
 
 def make_candidate(
-        path: str,
-        *,
-        fusion_score: float = 0.03,
+    path: str,
+    *,
+    fusion_score: float = 0.03,
 ) -> HybridFileCandidate:
     return HybridFileCandidate(
         relative_path=path,
@@ -89,7 +89,7 @@ def make_candidate(
 
 
 def test_multi_query_retrieval_evidence(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_test_repository(tmp_path)
 
@@ -131,7 +131,7 @@ def test_multi_query_retrieval_evidence(
 
 
 def test_task_policy_prefers_target_module(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_test_repository(tmp_path)
 
@@ -167,7 +167,7 @@ def test_task_policy_prefers_target_module(
 
 
 def test_non_indexable_file_is_skipped(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_test_repository(tmp_path)
 
@@ -194,7 +194,7 @@ def test_non_indexable_file_is_skipped(
 
 
 def test_max_files_budget(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_test_repository(tmp_path)
 
@@ -226,7 +226,7 @@ def test_max_files_budget(
 
 
 def test_byte_budget(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_test_repository(tmp_path)
 
@@ -254,7 +254,7 @@ def test_byte_budget(
 
 
 def test_other_category_does_not_break_policy_scoring(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_test_repository(tmp_path)
 

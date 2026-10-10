@@ -1,33 +1,13 @@
-from typing import Protocol
-
-from agent_core.coding.model import (
-    ReadOnlyCodingResult,
-)
 from agent_core.coding.orchestration_model import (
     TaskAnalysisRecord,
 )
-from agent_core.context.model import (
-    TaskContextBundle,
+from agent_core.coding.protocols import (
+    CodingAnalyzer,
+    ContextFactory,
 )
 from agent_core.sdd.model import (
     TaskDefinition,
 )
-
-
-class ContextFactory(Protocol):
-
-    async def build(
-        self,
-        task: TaskDefinition,
-    ) -> TaskContextBundle: ...
-
-
-class CodingAnalyzer(Protocol):
-
-    async def analyze(
-        self,
-        bundle: TaskContextBundle,
-    ) -> ReadOnlyCodingResult: ...
 
 
 class AnalysisOrchestrationError(ValueError):
