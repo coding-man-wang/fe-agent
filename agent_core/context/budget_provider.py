@@ -9,14 +9,14 @@ from agent_core.sdd.model import (
 class StaticContextBudgetProvider:
 
     def __init__(
-            self,
-            budget: ContextBudgetUsage,
+        self,
+        budget: ContextBudgetUsage,
     ) -> None:
         self.budget = budget
 
     def get_budget(
-            self,
-            *,
-            task: TaskDefinition,
+        self,
+        *,
+        task: TaskDefinition,
     ) -> ContextBudgetUsage:
         return self.budget

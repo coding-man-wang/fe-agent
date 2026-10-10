@@ -36,12 +36,12 @@ class HybridRelevantFileSelector:
     }
 
     def __init__(
-        self,
-        *,
-        query_rrf_k: int = 60,
-        selection_rrf_k: int = 60,
-        retrieval_weight: float = 1.0,
-        policy_weight: float = 0.35,
+            self,
+            *,
+            query_rrf_k: int = 60,
+            selection_rrf_k: int = 60,
+            retrieval_weight: float = 1.0,
+            policy_weight: float = 0.35,
     ) -> None:
 
         if query_rrf_k < 1:
@@ -64,13 +64,13 @@ class HybridRelevantFileSelector:
         self.policy_weight = policy_weight
 
     def select(
-        self,
-        *,
-        index: RepositoryFileIndex,
-        hybrid_responses: list[HybridSearchResponse],
-        task: TaskDefinition,
-        max_files: int = 8,
-        max_total_bytes: int = 200_000,
+            self,
+            *,
+            index: RepositoryFileIndex,
+            hybrid_responses: list[HybridSearchResponse],
+            task: TaskDefinition,
+            max_files: int = 8,
+            max_total_bytes: int = 200_000,
     ) -> HybridRelevantFileSelection:
         if max_files < 1:
             raise ValueError("max_files 必须 >= 1")
@@ -148,8 +148,8 @@ class HybridRelevantFileSelector:
         )
 
     def _aggregate_retrieval(
-        self,
-        responses: list[HybridSearchResponse],
+            self,
+            responses: list[HybridSearchResponse],
     ) -> dict[str, dict]:
         aggregated: dict[str, dict] = {}
 
@@ -185,11 +185,11 @@ class HybridRelevantFileSelector:
         return aggregated
 
     def _calculate_policy_score(
-        self,
-        *,
-        path: str,
-        category: str,
-        task: TaskDefinition,
+            self,
+            *,
+            path: str,
+            category: str,
+            task: TaskDefinition,
     ) -> tuple[int, list[str]]:
         score = 0
 
@@ -210,32 +210,32 @@ class HybridRelevantFileSelector:
                 f"{task.task_type} Task " f"对 {category} 文件 " f"+{category_bonus}"
             )
 
-            normalized_path = path.lower()
+        normalized_path = path.lower()
 
-            matched_targets: list[str] = []
+        matched_targets: list[str] = []
 
-            for target in task.target_modules:
-                normalized_target = target.strip().lower().replace("\\", "/")
+        for target in task.target_modules:
+            normalized_target = target.strip().lower().replace("\\", "/")
 
-                if not normalized_target:
-                    continue
+            if not normalized_target:
+                continue
 
-                if normalized_target in normalized_path:
-                    matched_targets.append(target)
+            if normalized_target in normalized_path:
+                matched_targets.append(target)
 
-            if matched_targets:
-                score += 25
+        if matched_targets:
+            score += 25
 
-                reasons.append("匹配 target_modules: " + ", ".join(matched_targets))
+            reasons.append("匹配 target_modules: " + ", ".join(matched_targets))
 
-            return (
-                score,
-                reasons,
-            )
+        return (
+            score,
+            reasons,
+        )
 
     def _assign_retrieval_ranks(
-        self,
-        eligible: dict[str, dict],
+            self,
+            eligible: dict[str, dict],
     ) -> None:
 
         ordered = sorted(
@@ -247,8 +247,8 @@ class HybridRelevantFileSelector:
         )
 
         for rank, (
-            _,
-            data,
+                _,
+                data,
         ) in enumerate(
             ordered,
             start=1,
@@ -256,8 +256,8 @@ class HybridRelevantFileSelector:
             data["retrieval_rank"] = rank
 
     def _assign_policy_ranks(
-        self,
-        eligible: dict[str, dict],
+            self,
+            eligible: dict[str, dict],
     ) -> None:
 
         ordered = sorted(
@@ -269,8 +269,8 @@ class HybridRelevantFileSelector:
         )
 
         for rank, (
-            _,
-            data,
+                _,
+                data,
         ) in enumerate(
             ordered,
             start=1,
@@ -278,8 +278,8 @@ class HybridRelevantFileSelector:
             data["policy_rank"] = rank
 
     def _build_final_ranking(
-        self,
-        eligible: dict[str, dict],
+            self,
+            eligible: dict[str, dict],
     ) -> list[HybridRelevantFile]:
 
         results: list[HybridRelevantFile] = []
@@ -291,12 +291,12 @@ class HybridRelevantFileSelector:
             policy_rank = data.get("policy_rank")
 
             selection_score = self.retrieval_weight / (
-                self.selection_rrf_k + retrieval_rank
+                    self.selection_rrf_k + retrieval_rank
             )
 
             if policy_rank is not None:
                 selection_score += self.policy_weight / (
-                    self.selection_rrf_k + policy_rank
+                        self.selection_rrf_k + policy_rank
                 )
 
             file_record = data["file_record"]
