@@ -10,8 +10,8 @@ from agent_core.git.workspace import (
 
 
 def run_git(
-        root: Path,
-        *args: str,
+    root: Path,
+    *args: str,
 ) -> str:
     result = subprocess.run(
         [
@@ -29,7 +29,7 @@ def run_git(
 
 
 def create_git_repository(
-        root: Path,
+    root: Path,
 ) -> str:
     run_git(
         root,
@@ -81,7 +81,7 @@ def proposal_id() -> str:
 
 @pytest.mark.asyncio
 async def test_create_agent_git_workspace(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     repository = tmp_path / "repository"
 
@@ -111,27 +111,27 @@ async def test_create_agent_git_workspace(
     assert worktree.is_dir()
 
     assert (
-            run_git(
-                worktree,
-                "rev-parse",
-                "HEAD",
-            )
-            == base_sha
+        run_git(
+            worktree,
+            "rev-parse",
+            "HEAD",
+        )
+        == base_sha
     )
 
     assert (
-            run_git(
-                worktree,
-                "branch",
-                "--show-current",
-            )
-            == record.branch_name
+        run_git(
+            worktree,
+            "branch",
+            "--show-current",
+        )
+        == record.branch_name
     )
 
 
 @pytest.mark.asyncio
 async def test_workspace_is_based_on_committed_head(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     repository = tmp_path / "repository"
 
@@ -169,7 +169,7 @@ async def test_workspace_is_based_on_committed_head(
 
 @pytest.mark.asyncio
 async def test_create_workspace_is_idempotent(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     repository = tmp_path / "repository"
 

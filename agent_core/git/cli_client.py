@@ -18,11 +18,11 @@ class CliGitClient:
     """
 
     async def run(
-            self,
-            *,
-            cwd: Path,
-            args: list[str],
-            allow_failure: bool = False,
+        self,
+        *,
+        cwd: Path,
+        args: list[str],
+        allow_failure: bool = False,
     ) -> GitCommandResult:
         process = await asyncio.create_subprocess_exec(
             "git",

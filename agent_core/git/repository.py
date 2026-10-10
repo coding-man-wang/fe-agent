@@ -24,15 +24,15 @@ class GitRepositoryInspector:
     """
 
     def __init__(
-            self,
-            *,
-            git_client: GitClient | None = None,
+        self,
+        *,
+        git_client: GitClient | None = None,
     ) -> None:
         self.git_client = git_client or CliGitClient()
 
     async def inspect(
-            self,
-            repository_path: str | Path,
+        self,
+        repository_path: str | Path,
     ) -> GitRepositoryState:
 
         requested_path = Path(repository_path).resolve()
@@ -62,8 +62,8 @@ class GitRepositoryInspector:
         )
 
     async def _resolve_root(
-            self,
-            cwd: Path,
+        self,
+        cwd: Path,
     ) -> Path:
 
         result = await self.git_client.run(
@@ -93,8 +93,8 @@ class GitRepositoryInspector:
         return root
 
     async def _read_head(
-            self,
-            root: Path,
+        self,
+        root: Path,
     ) -> str:
 
         result = await self.git_client.run(
@@ -120,8 +120,8 @@ class GitRepositoryInspector:
         return sha
 
     async def _read_branch(
-            self,
-            root: Path,
+        self,
+        root: Path,
     ) -> str | None:
 
         result = await self.git_client.run(
@@ -157,8 +157,8 @@ class GitRepositoryInspector:
         return branch or None
 
     async def _read_status(
-            self,
-            root: Path,
+        self,
+        root: Path,
     ) -> GitWorkingTreeStatus:
 
         result = await self.git_client.run(

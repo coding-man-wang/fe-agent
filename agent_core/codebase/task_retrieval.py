@@ -21,10 +21,10 @@ from agent_core.sdd.model import (
 
 class SemanticCodeSearcher(Protocol):
     async def search(
-            self,
-            query: str,
-            *,
-            top_k: int = 5,
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
     ) -> SemanticSearchResponse: ...
 
 
@@ -52,17 +52,17 @@ class TaskRetrievalService:
     """
 
     def __init__(
-            self,
-            *,
-            exact_searcher: ExactCodeSearcher,
-            semantic_searcher: SemanticCodeSearcher,
-            hybrid_retriever: HybridRetriever,
-            selector: HybridRelevantFileSelector,
-            max_queries: int = 6,
-            lexical_max_results: int = 20,
-            semantic_top_k: int = 8,
-            max_files: int = 8,
-            max_total_bytes: int = 200_000,
+        self,
+        *,
+        exact_searcher: ExactCodeSearcher,
+        semantic_searcher: SemanticCodeSearcher,
+        hybrid_retriever: HybridRetriever,
+        selector: HybridRelevantFileSelector,
+        max_queries: int = 6,
+        lexical_max_results: int = 20,
+        semantic_top_k: int = 8,
+        max_files: int = 8,
+        max_total_bytes: int = 200_000,
     ) -> None:
         if max_queries < 1:
             raise ValueError("max_queries 必须 >= 1")
@@ -98,10 +98,10 @@ class TaskRetrievalService:
         self.max_total_bytes = max_total_bytes
 
     async def retrieve(
-            self,
-            *,
-            task: TaskDefinition,
-            index: RepositoryFileIndex,
+        self,
+        *,
+        task: TaskDefinition,
+        index: RepositoryFileIndex,
     ) -> HybridRelevantFileSelection:
 
         queries = self.build_queries(task)
@@ -137,8 +137,8 @@ class TaskRetrievalService:
         )
 
     def build_queries(
-            self,
-            task: TaskDefinition,
+        self,
+        task: TaskDefinition,
     ) -> list[str]:
         """
         v0.1 使用确定性 Query Builder。

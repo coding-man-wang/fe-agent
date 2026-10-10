@@ -27,13 +27,13 @@ from agent_core.git.workspace_store import (
 class AgentGitWorkspaceManager:
 
     def __init__(
-            self,
-            *,
-            repository_root: str | Path,
-            workspace_root: str | Path,
-            git_client: GitClient | None = None,
-            inspector: GitRepositoryInspector | None = None,
-            store: GitWorkspaceStore | None = None,
+        self,
+        *,
+        repository_root: str | Path,
+        workspace_root: str | Path,
+        git_client: GitClient | None = None,
+        inspector: GitRepositoryInspector | None = None,
+        store: GitWorkspaceStore | None = None,
     ) -> None:
 
         self.repository_root = Path(repository_root).resolve()
@@ -49,11 +49,11 @@ class AgentGitWorkspaceManager:
         self._validate_workspace_root()
 
     async def create(
-            self,
-            *,
-            task_id: str,
-            proposal_id: str,
-            base_commit_sha: str,
+        self,
+        *,
+        task_id: str,
+        proposal_id: str,
+        base_commit_sha: str,
     ) -> GitWorkspaceRecord:
 
         self._validate_hash(
@@ -157,8 +157,8 @@ class AgentGitWorkspaceManager:
             raise
 
     async def _reuse_existing(
-            self,
-            workspace_id: str,
+        self,
+        workspace_id: str,
     ) -> GitWorkspaceRecord:
 
         record = self.store.load(workspace_id)
@@ -205,8 +205,8 @@ class AgentGitWorkspaceManager:
         raise GitWorkspaceConflictError("未知 Workspace 状态: " f"{record.status}")
 
     async def _validate_base_commit(
-            self,
-            commit_sha: str,
+        self,
+        commit_sha: str,
     ) -> None:
 
         result = await self.git_client.run(
@@ -223,8 +223,8 @@ class AgentGitWorkspaceManager:
             raise GitWorkspaceError("Base Commit 不存在: " f"{commit_sha}")
 
     async def _validate_created_workspace(
-            self,
-            record: GitWorkspaceRecord,
+        self,
+        record: GitWorkspaceRecord,
     ) -> None:
 
         path = Path(record.worktree_path)
@@ -246,8 +246,8 @@ class AgentGitWorkspaceManager:
             )
 
     async def _validate_existing_workspace(
-            self,
-            record: GitWorkspaceRecord,
+        self,
+        record: GitWorkspaceRecord,
     ) -> None:
 
         path = Path(record.worktree_path)
@@ -264,10 +264,10 @@ class AgentGitWorkspaceManager:
 
     @staticmethod
     def calculate_workspace_id(
-            *,
-            task_id: str,
-            proposal_id: str,
-            base_commit_sha: str,
+        *,
+        task_id: str,
+        proposal_id: str,
+        base_commit_sha: str,
     ) -> str:
 
         payload = json.dumps(
@@ -288,9 +288,9 @@ class AgentGitWorkspaceManager:
 
     @staticmethod
     def build_branch_name(
-            *,
-            task_id: str,
-            workspace_id: str,
+        *,
+        task_id: str,
+        workspace_id: str,
     ) -> str:
 
         normalized_task = task_id.strip().lower()
@@ -309,20 +309,20 @@ class AgentGitWorkspaceManager:
         return "fe-agent/" f"{normalized_task}-" f"{workspace_id[:12]}"
 
     def _validate_workspace_root(
-            self,
+        self,
     ) -> None:
 
         if (
-                self.workspace_root == self.repository_root
-                or self.workspace_root.is_relative_to(self.repository_root)
+            self.workspace_root == self.repository_root
+            or self.workspace_root.is_relative_to(self.repository_root)
         ):
             raise ValueError("Workspace Root " "不能位于 Repository Root 内部")
 
     @staticmethod
     def _validate_hash(
-            value: str,
-            *,
-            name: str,
+        value: str,
+        *,
+        name: str,
     ) -> None:
 
         if len(value) != 40 and name == "Base Commit SHA":

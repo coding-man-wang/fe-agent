@@ -14,8 +14,8 @@ from agent_core.git.workspace_binding import (
 
 
 def run_git(
-        root: Path,
-        *args: str,
+    root: Path,
+    *args: str,
 ) -> str:
     result = subprocess.run(
         [
@@ -33,7 +33,7 @@ def run_git(
 
 
 def create_repository(
-        root: Path,
+    root: Path,
 ) -> str:
     run_git(
         root,
@@ -85,7 +85,7 @@ def create_proposal_id() -> str:
 
 @pytest.mark.asyncio
 async def test_bind_ready_workspace(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     repository = tmp_path / "repo"
 
@@ -123,7 +123,7 @@ async def test_bind_ready_workspace(
 
 @pytest.mark.asyncio
 async def test_bind_rejects_wrong_task(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     repository = tmp_path / "repo"
 
@@ -156,7 +156,7 @@ async def test_bind_rejects_wrong_task(
 
 @pytest.mark.asyncio
 async def test_bind_rejects_wrong_proposal(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     repository = tmp_path / "repo"
 

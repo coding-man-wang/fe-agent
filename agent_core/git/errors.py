@@ -12,11 +12,11 @@ class GitCommandError(GitRepositoryError):
     """
 
     def __init__(
-            self,
-            *,
-            args: list[str],
-            exit_code: int,
-            stderr: str,
+        self,
+        *,
+        args: list[str],
+        exit_code: int,
+        stderr: str,
     ) -> None:
         self.args = list(args)
         self.exit_code = exit_code

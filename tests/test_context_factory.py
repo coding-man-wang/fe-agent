@@ -48,10 +48,10 @@ from agent_core.sdd.model import (
 class FakeSemanticSearcher:
 
     async def search(
-            self,
-            query: str,
-            *,
-            top_k: int = 5,
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
     ) -> SemanticSearchResponse:
         return SemanticSearchResponse(
             query=query,
@@ -73,7 +73,7 @@ class FakeSemanticSearcher:
 
 
 def create_repository(
-        root: Path,
+    root: Path,
 ) -> None:
     api = root / "src" / "api"
 
@@ -134,7 +134,7 @@ def create_task():
 
 @pytest.mark.asyncio
 async def test_context_factory_builds_real_context(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_repository(tmp_path)
 
@@ -205,7 +205,7 @@ async def test_context_factory_builds_real_context(
 
 @pytest.mark.asyncio
 async def test_context_factory_respects_char_budget(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_repository(tmp_path)
 

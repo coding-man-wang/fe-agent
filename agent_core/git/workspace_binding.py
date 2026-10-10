@@ -27,19 +27,19 @@ class WorkspaceBindingService:
     """
 
     def __init__(
-            self,
-            *,
-            inspector: GitRepositoryInspector | None = None,
+        self,
+        *,
+        inspector: GitRepositoryInspector | None = None,
     ) -> None:
 
         self.inspector = inspector or GitRepositoryInspector()
 
     async def bind(
-            self,
-            *,
-            workspace: GitWorkspaceRecord,
-            task_id: str,
-            proposal_id: str,
+        self,
+        *,
+        workspace: GitWorkspaceRecord,
+        task_id: str,
+        proposal_id: str,
     ) -> WorkspaceExecutionContext:
 
         # 1. Workspace 必须已经创建成功。

@@ -12,8 +12,8 @@ from agent_core.git.repository import (
 
 
 def run_git(
-        root: Path,
-        *args: str,
+    root: Path,
+    *args: str,
 ) -> str:
     result = subprocess.run(
         [
@@ -31,7 +31,7 @@ def run_git(
 
 
 def create_git_repository(
-        root: Path,
+    root: Path,
 ) -> None:
     run_git(
         root,
@@ -73,7 +73,7 @@ def create_git_repository(
 
 @pytest.mark.asyncio
 async def test_inspect_clean_repository(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_git_repository(tmp_path)
 
@@ -100,7 +100,7 @@ async def test_inspect_clean_repository(
 
 @pytest.mark.asyncio
 async def test_inspect_dirty_tracked_file(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_git_repository(tmp_path)
 
@@ -118,7 +118,7 @@ async def test_inspect_dirty_tracked_file(
 
 @pytest.mark.asyncio
 async def test_inspect_untracked_file(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_git_repository(tmp_path)
 
@@ -136,7 +136,7 @@ async def test_inspect_untracked_file(
 
 @pytest.mark.asyncio
 async def test_inspect_from_nested_directory(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_git_repository(tmp_path)
 
@@ -151,7 +151,7 @@ async def test_inspect_from_nested_directory(
 
 @pytest.mark.asyncio
 async def test_non_git_directory_is_rejected(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     inspector = GitRepositoryInspector()
 
@@ -161,7 +161,7 @@ async def test_non_git_directory_is_rejected(
 
 @pytest.mark.asyncio
 async def test_detached_head_is_supported(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     create_git_repository(tmp_path)
 

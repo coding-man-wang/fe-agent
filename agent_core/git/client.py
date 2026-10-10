@@ -25,9 +25,9 @@ class GitClient(Protocol):
     """
 
     async def run(
-            self,
-            *,
-            cwd: Path,
-            args: list[str],
-            allow_failure: bool = False,
+        self,
+        *,
+        cwd: Path,
+        args: list[str],
+        allow_failure: bool = False,
     ) -> GitCommandResult: ...
