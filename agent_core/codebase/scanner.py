@@ -16,7 +16,6 @@ class RepositoryScanner:
             raise ValueError(f"项目路径不是目录: {root}")
 
         package_json_path = root / "package.json"
-        print(111, package_json_path)
         package_data: dict[
             str,
             Any,
@@ -62,7 +61,6 @@ class RepositoryScanner:
                 encoding="utf-8",
             ) as file:
                 data = json.load(file)
-                print(222, data)
 
         except json.JSONDecodeError as error:
             raise ValueError(f"package.json 格式错误: {path}") from error

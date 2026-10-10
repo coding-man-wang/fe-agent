@@ -16,8 +16,6 @@ from tests.test_context_renderer import (
 )
 
 load_dotenv()
-print(11111, os.getenv("LLM_API_KEY"))
-
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
