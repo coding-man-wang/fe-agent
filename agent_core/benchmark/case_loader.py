@@ -21,6 +21,8 @@ class BenchmarkCaseLoader:
 
         self.case_root = Path(case_root).resolve(strict=True)
 
+        self.runnable_root = self.case_root / "runnable"
+
         if not self.case_root.is_dir():
             raise BenchmarkCaseLoadError("case_root 不是目录")
 
@@ -31,7 +33,7 @@ class BenchmarkCaseLoader:
 
         self._validate_case_id(case_id)
 
-        path = self.case_root / f"{case_id}.json"
+        path = self.runnable_root / f"{case_id}.json"
 
         if not path.is_file():
             raise BenchmarkCaseLoadError("Benchmark Case 不存在: " f"{case_id}")
@@ -73,7 +75,7 @@ class BenchmarkCaseLoader:
 
         case_ids: list[str] = []
 
-        for path in self.case_root.glob("CASE-*.json"):
+        for path in self.runnable_root.glob("CASE-*.json"):
 
             if not path.is_file():
                 continue

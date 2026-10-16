@@ -21,7 +21,7 @@ async def main():
         benchmark_repository=(benchmark_repository),
     )
 
-    result = await runner.run(case_id="CASE-001")
+    result = await runner.run(case_id="CASE-004")
 
     print(
         result.model_dump_json(

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "case_id": "CASE-013",
+  "title": "Review 修订：订单筛选不引入全局 Store",
+  "category": "review_revision",
+  "difficulty": "hard",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "requirement": "代码评审反馈：订单状态筛选只在 Orders 页面使用，不应该为了这个局部状态新增 Pinia Store。请按照评审意见修订实现：筛选状态保留在订单页面本地，继续通过订单 API 层同时支持 Mock 和 Remote 模式，不改变 Router，也不要新增订单 Store。",
+  "expectation": {
+    "expected_files": [
+      "src/views/OrdersView.vue",
+      "src/api/orders.ts",
+      "src/mocks/service.ts"
+    ],
+    "forbidden_files": [
+      "src/stores",
+      "src/router"
+    ],
+    "expected_behaviors": [
+      "订单筛选状态保持为页面局部状态",
+      "不新增或修改订单 Pinia Store",
+      "Mock 与 Remote 模式筛选语义一致",
+      "Router 保持不变",
+      "修订后功能仍支持 all、pending、paid、cancelled"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}

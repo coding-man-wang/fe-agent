@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "case_id": "CASE-006",
+  "title": "用户列表支持切换每页数量",
+  "category": "cross_file_change",
+  "difficulty": "medium",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "requirement": "用户列表需要允许用户选择每页显示 10 条或 20 条数据，默认仍为 10 条。切换每页数量时应回到第一页并重新加载用户列表，同时分页总页数需要正确更新。项目现有查询模型已经具备 pageSize 能力，请优先复用现有实现，不修改 API 请求协议、Mock 服务、Router 或用户筛选组件。",
+  "expectation": {
+    "required_context_files": [
+      "src/stores/users.ts",
+      "src/views/UsersView.vue"
+    ],
+    "useful_context_files": [
+      "src/api/users.ts",
+      "src/mocks/service.ts",
+      "src/types/domain.ts"
+    ],
+    "expected_change_files": [
+      "src/stores/users.ts",
+      "src/views/UsersView.vue"
+    ],
+    "allowed_change_files": [
+      "tests/unit/usersStore.test.ts"
+    ],
+    "forbidden_change_files": [
+      "src/router",
+      "src/components/UserFilters.vue"
+    ],
+    "expected_behaviors": [
+      "用户可以选择每页显示 10 条或 20 条数据",
+      "默认 pageSize 仍然为 10",
+      "修改 pageSize 后 page 重置为 1",
+      "修改 pageSize 后重新获取用户列表",
+      "totalPages 根据新的 pageSize 自动重新计算",
+      "现有 keyword 和 status 筛选行为保持不变",
+      "复用现有 UserQuery pageSize，不修改 API 请求协议",
+      "Mock 服务保持不变"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "case_id": "CASE-004",
+  "title": "用户列表支持待处理状态",
+  "category": "cross_file_change",
+  "difficulty": "medium",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "requirement": "用户现在除了 Active 和 Disabled 外，还需要支持 Pending 状态。请让用户列表中的状态筛选能够选择 Pending，并保证本地 Mock 数据中存在一部分 Pending 用户，从而可以实际验证筛选结果。保持现有 Active、Disabled、All statuses 的行为不变，不修改用户 API 请求协议、Router 或分页逻辑。",
+  "expectation": {
+    "required_context_files": [
+      "src/types/domain.ts",
+      "src/components/UserFilters.vue",
+      "src/mocks/database.ts"
+    ],
+    "useful_context_files": [
+      "src/mocks/service.ts",
+      "src/stores/users.ts",
+      "src/views/UsersView.vue"
+    ],
+    "expected_change_files": [
+      "src/types/domain.ts",
+      "src/components/UserFilters.vue",
+      "src/mocks/database.ts"
+    ],
+    "allowed_change_files": [
+      "tests/unit/usersStore.test.ts"
+    ],
+    "expected_behaviors": [
+      "UserStatus 支持 pending 状态",
+      "用户状态筛选中可以选择 Pending",
+      "现有 Active、Disabled 和 All statuses 选项保持可用",
+      "Mock 用户数据中存在 pending 用户",
+      "已有基于 UserStatus 的筛选逻辑能够处理 pending",
+      "用户 API 请求协议保持不变",
+      "分页逻辑保持不变"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_id": "CASE-015",
+  "title": "Review 修订：金额格式化禁止新增运行时依赖",
+  "category": "review_revision",
+  "difficulty": "hard",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "requirement": "代码评审反馈：订单金额格式化不值得新增第三方运行时依赖，请移除对额外货币格式化库的依赖方案，使用浏览器原生能力把订单总额按 USD 货币格式展示。保持订单数据结构、API、Router 和其他表格字段不变，并确保 package.json 与 lockfile 不新增该类依赖。",
+  "expectation": {
+    "expected_files": [
+      "src/views/OrdersView.vue"
+    ],
+    "forbidden_files": [
+      "src/api",
+      "src/router",
+      "src/types",
+      "package.json",
+      "package-lock.json"
+    ],
+    "expected_behaviors": [
+      "订单总额使用浏览器原生能力按 USD 货币格式展示",
+      "不新增货币格式化运行时依赖",
+      "package.json 和 package-lock.json 不因该需求增加依赖",
+      "订单数据结构和 API 保持不变",
+      "其他订单表格字段保持不变"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}

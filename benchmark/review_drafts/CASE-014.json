@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_id": "CASE-014",
+  "title": "Review 修订：每页数量切换复用已有查询能力",
+  "category": "review_revision",
+  "difficulty": "hard",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "requirement": "代码评审反馈：用户列表的 pageSize 原本已经贯穿 UserQuery、API 和 Mock 服务，之前的实现不应修改这些层。请按评审意见收窄改动，只在真正需要的用户页面和状态管理位置完成 10/20 条每页切换，并确保切换后回到第一页重新加载。",
+  "expectation": {
+    "expected_files": [
+      "src/stores/users.ts",
+      "src/views/UsersView.vue"
+    ],
+    "forbidden_files": [
+      "src/api",
+      "src/mocks",
+      "src/router",
+      "src/types/domain.ts"
+    ],
+    "expected_behaviors": [
+      "只复用现有 pageSize 查询能力，不重新设计 API",
+      "用户可以选择每页 10 或 20 条",
+      "切换后回到第一页并重新加载",
+      "API、Mock、UserQuery 定义保持不变",
+      "改动范围按 Review 意见收窄"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}

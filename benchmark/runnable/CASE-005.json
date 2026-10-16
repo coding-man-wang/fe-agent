@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "case_id": "CASE-005",
+  "title": "订单列表支持状态筛选",
+  "category": "cross_file_change",
+  "difficulty": "medium",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "requirement": "订单列表需要增加状态筛选能力。用户应能够查看全部订单，或者只查看 Pending、Paid、Cancelled 中某一种状态。切换状态后应重新获取订单列表。本地 Mock 模式和 Remote API 模式需要保持相同的筛选语义。保持现有订单表格字段、Loading、错误处理以及 Router 行为不变。",
+  "expectation": {
+    "required_context_files": [
+      "src/views/OrdersView.vue",
+      "src/api/orders.ts",
+      "src/mocks/service.ts"
+    ],
+    "useful_context_files": [
+      "src/types/domain.ts",
+      "src/mocks/database.ts"
+    ],
+    "expected_change_files": [
+      "src/views/OrdersView.vue",
+      "src/api/orders.ts",
+      "src/mocks/service.ts"
+    ],
+    "expected_behaviors": [
+      "订单列表支持 all、pending、paid、cancelled 四种筛选状态",
+      "切换筛选条件后订单列表重新加载",
+      "Mock 模式只返回符合所选状态的订单",
+      "all 状态返回全部订单",
+      "Remote API 模式能够把订单状态作为请求参数传递",
+      "订单表格现有字段与展示行为保持不变",
+      "Loading 和错误处理行为保持不变",
+      "Router 行为保持不变"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}
