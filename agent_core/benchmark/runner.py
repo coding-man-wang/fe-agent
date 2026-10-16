@@ -1,3 +1,4 @@
+import asyncio
 from typing import Protocol
 from uuid import uuid4
 
@@ -83,6 +84,9 @@ class RetrievalCaptureProtocol(Protocol):
         self,
         *,
         task_plan: TaskPlan,
+        raw_requirement: str,
+        requirement_spec: RequirementSpec,
+        repository_revision: str,
     ) -> BenchmarkRetrievalCapture: ...
 
 
@@ -272,7 +276,14 @@ class BenchmarkRunner:
             # =================================
 
             retrieval_capture = await self.retrieval_capture_service.capture(
-                task_plan=task_plan
+                task_plan=task_plan,
+                # 用户最初输入，
+                # 没有经过任何 LLM 改写。
+                raw_requirement=(case.requirement),
+                # RequirementAnalyzer
+                # 结构化之后的需求。
+                requirement_spec=(requirement_spec),
+                repository_revision=(record.base_commit_sha),
             )
 
             record = record.model_copy(
@@ -313,7 +324,24 @@ class BenchmarkRunner:
             self.run_store.save(record)
 
             return record
+        except asyncio.CancelledError:
 
+            failed = record.model_copy(
+                deep=True,
+                update={
+                    "status": "failed",
+                    "finished_at": utc_now(),
+                    "error": (
+                        "CancelledError: " "benchmark run cancelled " "or timed out"
+                    ),
+                },
+            )
+
+            self.run_store.save(failed)
+
+            # CancelledError 一定要继续抛出，
+            # 不能吞掉。
+            raise
         except Exception as exc:
 
             failed = record.model_copy(

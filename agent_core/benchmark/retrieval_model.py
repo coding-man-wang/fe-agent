@@ -5,13 +5,33 @@ from pydantic import (
 )
 
 
+class BenchmarkRetrievalQuery(BaseModel):
+    """
+    Benchmark 记录的一条搜索 Query。
+
+    不只是记录搜索了什么，
+    还记录这个 Query 从哪里来。
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    text: str
+
+    sources: list[str] = Field(
+        default_factory=list,
+    )
+
+    kinds: list[str] = Field(
+        default_factory=list,
+    )
+
+
 class BenchmarkRetrievedFile(BaseModel):
     """
-    Benchmark 视角下的一条 Retrieval 文件结果。
-
-    这里不直接复用 Runtime 内部的
-    HybridRelevantFile，避免 Benchmark
-    与某一种 Retrieval 实现强耦合。
+    Benchmark 视角下的一条
+    Retrieval 文件结果。
     """
 
     model_config = ConfigDict(
@@ -23,6 +43,18 @@ class BenchmarkRetrievedFile(BaseModel):
     category: str
 
     selection_score: float
+
+    retrieval_score: float = 0.0
+
+    best_semantic_score: float | None = None
+
+    query_hit_count: int = 0
+
+    lexical_hit_count: int = 0
+
+    semantic_hit_count: int = 0
+
+    hybrid_hit_count: int = 0
 
     matched_queries: list[str] = Field(
         default_factory=list,
@@ -48,7 +80,24 @@ class BenchmarkTaskRetrieval(BaseModel):
 
     title: str
 
+    # -----------------------------------
+    # 兼容旧结构。
+    #
+    # 报表如果只想看到搜索词，
+    # 继续读 queries 即可。
+    # -----------------------------------
+
     queries: list[str] = Field(
+        default_factory=list,
+    )
+
+    # -----------------------------------
+    # v0.2：
+    #
+    # 带来源的 Query 信息。
+    # -----------------------------------
+
+    query_details: list[BenchmarkRetrievalQuery] = Field(
         default_factory=list,
     )
 
@@ -77,7 +126,7 @@ class BenchmarkRetrievalCapture(BaseModel):
         extra="forbid",
     )
 
-    mode: str = "lexical_baseline"
+    mode: str = "lexical_requirement_aware_v0.2"
 
     indexed_files: int = Field(
         ge=0,

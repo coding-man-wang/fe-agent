@@ -1,3 +1,5 @@
+from pathlib import PurePosixPath
+
 from agent_core.codebase.model import (
     RepositoryFileIndex,
     HybridSearchResponse,
@@ -151,10 +153,16 @@ class HybridRelevantFileSelector:
         self,
         responses: list[HybridSearchResponse],
     ) -> dict[str, dict]:
-        aggregated: dict[str, dict] = {}
+
+        aggregated: dict[
+            str,
+            dict,
+        ] = {}
 
         for response in responses:
-            for rank, candidate in enumerate(response.candidates, start=1):
+
+            for candidate in response.candidates:
+
                 data = aggregated.setdefault(
                     candidate.relative_path,
                     {
@@ -163,18 +171,49 @@ class HybridRelevantFileSelector:
                         "reasons": [],
                         "best_semantic_chunk": None,
                         "best_semantic_score": None,
+                        "lexical_hit_count": 0,
+                        "semantic_hit_count": 0,
+                        "hybrid_hit_count": 0,
                     },
                 )
 
-                data["retrieval_score"] += 1.0 / (self.query_rrf_k + rank)
+                # -----------------------------
+                # 关键变化：
+                #
+                # 不再重新只根据 rank
+                # 计算一次 RRF。
+                #
+                # 直接保留 HybridRetriever
+                # 已经计算好的 fusion_score。
+                # -----------------------------
+
+                data["retrieval_score"] += candidate.fusion_score
 
                 data["queries"].add(response.query)
 
-                data["reasons"].append(
-                    "Hybrid Retrieval " f"query={response.query}, " f"rank={rank}"
-                )
+                # -----------------------------
+                # 记录搜索证据来自哪里。
+                # -----------------------------
+
+                has_lexical = candidate.lexical_rank is not None
+
+                has_semantic = candidate.semantic_rank is not None
+
+                if has_lexical:
+                    data["lexical_hit_count"] += 1
+
+                if has_semantic:
+                    data["semantic_hit_count"] += 1
+
+                if has_lexical and has_semantic:
+                    data["hybrid_hit_count"] += 1
+
+                # -----------------------------
+                # 保留最强 Semantic Evidence。
+                # -----------------------------
 
                 if candidate.semantic_score is not None:
+
                     current_best = data["best_semantic_score"]
 
                     if current_best is None or candidate.semantic_score > current_best:
@@ -182,7 +221,153 @@ class HybridRelevantFileSelector:
 
                         data["best_semantic_chunk"] = candidate.best_semantic_chunk
 
+                # -----------------------------
+                # Diagnostics
+                # -----------------------------
+
+                evidence = []
+
+                if has_lexical:
+                    evidence.append("lexical")
+
+                if has_semantic:
+                    evidence.append("semantic")
+
+                data["reasons"].append(
+                    (
+                        "Hybrid Retrieval "
+                        f"query={response.query}, "
+                        f"signals="
+                        f"{'+'.join(evidence)}, "
+                        f"fusion_score="
+                        f"{candidate.fusion_score:.6f}"
+                    )
+                )
+
         return aggregated
+
+    @staticmethod
+    def _calculate_target_bonus(
+        *,
+        path: str,
+        target: str,
+    ) -> tuple[int, str | None]:
+        """
+        target_modules 的信息精确程度不同，
+        不能统一 +25。
+
+        精确文件：
+            +25
+
+        文件名 / Symbol：
+            +15
+
+        大目录：
+            +5
+        """
+
+        normalized_path = (
+            path.replace(
+                "\\",
+                "/",
+            )
+            .lower()
+            .strip("/")
+        )
+
+        normalized_target = (
+            target.replace(
+                "\\",
+                "/",
+            )
+            .lower()
+            .strip("/")
+        )
+
+        if not normalized_target:
+            return (
+                0,
+                None,
+            )
+
+        target_path = PurePosixPath(normalized_target)
+
+        target_name = target_path.name
+
+        path_name = PurePosixPath(normalized_path).name
+
+        # ---------------------------------
+        # 情况一：
+        #
+        # 明确文件路径 / 文件名。
+        #
+        # 例如：
+        #
+        # src/components/UserProfileForm.vue
+        # ---------------------------------
+
+        if target_path.suffix:
+
+            if (
+                normalized_path == normalized_target
+                or normalized_path.endswith("/" + normalized_target)
+                or path_name == target_name
+            ):
+                return (
+                    25,
+                    ("精确匹配 " "target file: " f"{target}"),
+                )
+
+            return (
+                0,
+                None,
+            )
+
+        # ---------------------------------
+        # 情况二：
+        #
+        # 看起来是目录。
+        #
+        # src/components
+        # tests/unit
+        #
+        # 这种信息很粗，
+        # 只能轻微加分。
+        # ---------------------------------
+
+        if "/" in normalized_target:
+
+            directory_prefix = normalized_target.rstrip("/") + "/"
+
+            if normalized_path.startswith(directory_prefix):
+                return (
+                    5,
+                    ("匹配 target directory: " f"{target}"),
+                )
+
+            return (
+                0,
+                None,
+            )
+
+        # ---------------------------------
+        # 情况三：
+        #
+        # 文件名 / Symbol 名。
+        #
+        # UserProfileForm
+        # ---------------------------------
+
+        if normalized_target in path_name:
+            return (
+                15,
+                ("匹配 target symbol: " f"{target}"),
+            )
+
+        return (
+            0,
+            None,
+        )
 
     def _calculate_policy_score(
         self,
@@ -212,21 +397,31 @@ class HybridRelevantFileSelector:
 
         normalized_path = path.lower()
 
-        matched_targets: list[str] = []
+        best_target_bonus = 0
+
+        best_target_reason = None
 
         for target in task.target_modules:
-            normalized_target = target.strip().lower().replace("\\", "/")
 
-            if not normalized_target:
-                continue
+            (
+                target_bonus,
+                target_reason,
+            ) = self._calculate_target_bonus(
+                path=path,
+                target=target,
+            )
 
-            if normalized_target in normalized_path:
-                matched_targets.append(target)
+            if target_bonus > best_target_bonus:
+                best_target_bonus = target_bonus
 
-        if matched_targets:
-            score += 25
+                best_target_reason = target_reason
 
-            reasons.append("匹配 target_modules: " + ", ".join(matched_targets))
+        if best_target_bonus:
+
+            score += best_target_bonus
+
+            if best_target_reason:
+                reasons.append(best_target_reason)
 
         return (
             score,
@@ -316,8 +511,13 @@ class HybridRelevantFileSelector:
                     policy_score=(data["policy_score"]),
                     policy_rank=(policy_rank),
                     selection_score=(selection_score),
-                    matched_queries=sorted(data["queries"]),
                     best_semantic_chunk=(data["best_semantic_chunk"]),
+                    best_semantic_score=(data["best_semantic_score"]),
+                    query_hit_count=len(data["queries"]),
+                    lexical_hit_count=(data["lexical_hit_count"]),
+                    semantic_hit_count=(data["semantic_hit_count"]),
+                    hybrid_hit_count=(data["hybrid_hit_count"]),
+                    matched_queries=sorted(data["queries"]),
                     reasons=reasons,
                 )
             )

@@ -285,3 +285,86 @@ async def test_repository_guard_rejects_dirty_repository(
     ):
 
         await guard.require_ready(case=create_case())
+
+
+from agent_core.benchmark.case_model import (
+    BenchmarkCase,
+)
+
+BASE_SHA = "a" * 40
+
+
+def test_v1_case_builds_legacy_oracles():
+
+    case = BenchmarkCase.model_validate(
+        {
+            "schema_version": 1,
+            "case_id": "CASE-001",
+            "title": "legacy",
+            "category": "single_file_change",
+            "difficulty": "easy",
+            "repository_name": "repo",
+            "base_commit_sha": BASE_SHA,
+            "requirement": "change",
+            "expectation": {
+                "expected_files": ["src/A.vue"],
+                "forbidden_files": ["src/api"],
+                "expected_behaviors": ["works"],
+                "verification_command_ids": ["test"],
+            },
+        }
+    )
+
+    retrieval = case.retrieval_oracle()
+
+    change = case.change_oracle()
+
+    assert retrieval.required_context_files == ["src/A.vue"]
+
+    # v1 的 forbidden_files
+    # 不再错误地处罚 Retrieval。
+    assert retrieval.forbidden_context_files == []
+
+    assert change.expected_change_files == ["src/A.vue"]
+
+    assert change.forbidden_change_files == ["src/api"]
+
+
+def test_v2_case_separates_context_and_change():
+
+    case = BenchmarkCase.model_validate(
+        {
+            "schema_version": 2,
+            "case_id": "CASE-006",
+            "title": "page size",
+            "category": "cross_file_change",
+            "difficulty": "medium",
+            "repository_name": "repo",
+            "base_commit_sha": BASE_SHA,
+            "requirement": "support page size",
+            "expectation": {
+                "required_context_files": [
+                    "src/stores/users.ts",
+                    "src/views/UsersView.vue",
+                ],
+                "useful_context_files": ["src/api/users.ts"],
+                "forbidden_context_files": [],
+                "expected_change_files": [
+                    "src/stores/users.ts",
+                    "src/views/UsersView.vue",
+                ],
+                "allowed_change_files": ["tests/unit"],
+                "forbidden_change_files": ["src/api/users.ts"],
+                "expected_behaviors": ["page size works"],
+                "verification_command_ids": ["test"],
+            },
+        }
+    )
+
+    retrieval = case.retrieval_oracle()
+
+    change = case.change_oracle()
+
+    assert "src/api/users.ts" in retrieval.useful_context_files
+
+    assert "src/api/users.ts" in change.forbidden_change_files

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Protocol
 from uuid import uuid4
 
@@ -42,6 +43,7 @@ class BenchmarkSuiteRunner:
         benchmark_runner: BenchmarkRunnerProtocol,
         result_builder: BenchmarkResultBuilder,
         result_store: BenchmarkResultStore,
+        case_timeout_seconds: float = 300.0,
     ) -> None:
 
         self.case_loader = case_loader
@@ -51,6 +53,11 @@ class BenchmarkSuiteRunner:
         self.result_builder = result_builder
 
         self.result_store = result_store
+
+        if case_timeout_seconds <= 0:
+            raise ValueError("case_timeout_seconds 必须大于 0")
+
+        self.case_timeout_seconds = case_timeout_seconds
 
     async def run_all(
         self,
@@ -84,8 +91,17 @@ class BenchmarkSuiteRunner:
         # -----------------------------------
 
         for case_id in case_ids:
+            print(
+                f"[benchmark] " f"{case_id} started",
+                flush=True,
+            )
 
             execution = await self._run_case(case_id=case_id)
+
+            print(
+                f"[benchmark] " f"{case_id} " f"{execution.status}",
+                flush=True,
+            )
 
             executions.append(execution)
 
@@ -109,7 +125,8 @@ class BenchmarkSuiteRunner:
 
         try:
 
-            run = await self.benchmark_runner.run(case_id=case_id)
+            async with asyncio.timeout(self.case_timeout_seconds):
+                run = await self.benchmark_runner.run(case_id=case_id)
 
             result = self.result_builder.build(run=run)
 
@@ -121,7 +138,16 @@ class BenchmarkSuiteRunner:
                 result=result,
                 error=None,
             )
+        except TimeoutError:
 
+            return BenchmarkSuiteCaseExecution(
+                case_id=case_id,
+                status="error",
+                result=None,
+                error=(
+                    "Benchmark case timeout " f"after " f"{self.case_timeout_seconds}s"
+                ),
+            )
         except Exception as exc:
 
             # 一个 Case 出问题，

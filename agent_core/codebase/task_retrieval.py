@@ -14,12 +14,18 @@ from agent_core.codebase.model import (
     RepositoryFileIndex,
     SemanticSearchResponse,
 )
+from agent_core.codebase.retrieval_query import (
+    RetrievalQuery,
+    RetrievalQueryBuilder,
+)
 from agent_core.sdd.model import (
+    RequirementSpec,
     TaskDefinition,
 )
 
 
 class SemanticCodeSearcher(Protocol):
+
     async def search(
         self,
         query: str,
@@ -30,25 +36,17 @@ class SemanticCodeSearcher(Protocol):
 
 class TaskRetrievalService:
     """
-    根据 TaskDefinition 执行完整的
-    Hybrid Retrieval Pipeline。
+    根据任务和需求上下文执行 Retrieval。
 
-    职责：
+    v0.2：
 
-    Task
-      -> Retrieval Queries
-      -> Lexical Retrieval
-      -> Semantic Retrieval
-      -> RRF Fusion
-      -> Relevant File Selection
+    Retrieval Query 不再只来自 Task。
 
-    本类不负责：
+    同时可以来自：
 
-    - Repository Scan
-    - File Index 构建
-    - Semantic Index 构建
-    - 文件内容读取
-    - TaskContextBundle 构建
+    - Raw Requirement
+    - RequirementSpec
+    - TaskDefinition
     """
 
     def __init__(
@@ -63,7 +61,9 @@ class TaskRetrievalService:
         semantic_top_k: int = 8,
         max_files: int = 8,
         max_total_bytes: int = 200_000,
+        query_builder: RetrievalQueryBuilder | None = None,
     ) -> None:
+
         if max_queries < 1:
             raise ValueError("max_queries 必须 >= 1")
 
@@ -97,18 +97,47 @@ class TaskRetrievalService:
 
         self.max_total_bytes = max_total_bytes
 
+        self.query_builder = query_builder or RetrievalQueryBuilder(
+            max_queries=max_queries
+        )
+
     async def retrieve(
         self,
         *,
         task: TaskDefinition,
         index: RepositoryFileIndex,
+        raw_requirement: str | None = None,
+        requirement_spec: RequirementSpec | None = None,
+        query_specs: list[RetrievalQuery] | None = None,
     ) -> HybridRelevantFileSelection:
 
-        queries = self.build_queries(task)
+        # Capture 可以提前生成 Query，
+        # 再把同一组 Query 传进来。
+        #
+        # 这样：
+        #
+        # Benchmark 记录的 Query
+        #
+        # 和
+        #
+        # 实际执行 Retrieval 的 Query
+        #
+        # 一定完全一致。
+
+        if query_specs is None:
+
+            query_specs = self.build_query_specs(
+                task=task,
+                raw_requirement=(raw_requirement),
+                requirement_spec=(requirement_spec),
+            )
 
         hybrid_responses = []
 
-        for query in queries:
+        for query_spec in query_specs:
+
+            query = query_spec.text
+
             lexical = self.exact_searcher.search(
                 index,
                 query,
@@ -136,50 +165,40 @@ class TaskRetrievalService:
             max_total_bytes=(self.max_total_bytes),
         )
 
+    def build_query_specs(
+        self,
+        *,
+        task: TaskDefinition,
+        raw_requirement: str | None = None,
+        requirement_spec: RequirementSpec | None = None,
+    ) -> list[RetrievalQuery]:
+
+        return self.query_builder.build(
+            task=task,
+            raw_requirement=(raw_requirement),
+            requirement_spec=(requirement_spec),
+        )
+
     def build_queries(
         self,
         task: TaskDefinition,
+        *,
+        raw_requirement: str | None = None,
+        requirement_spec: RequirementSpec | None = None,
     ) -> list[str]:
         """
-        v0.1 使用确定性 Query Builder。
+        保留旧接口。
 
-        暂时不调用 LLM，
-        保证 Retrieval 行为：
-        - 可测试
-        - 可复现
-        - 可解释
+        其他旧代码如果只需要：
+            list[str]
+
+        仍然可以继续使用。
         """
 
-        candidates = [
-            task.title,
-            task.objective,
-            *task.target_modules,
-            *task.inputs,
-        ]
+        query_specs = self.build_query_specs(
+            task=task,
+            raw_requirement=(raw_requirement),
+            requirement_spec=(requirement_spec),
+        )
 
-        queries: list[str] = []
-
-        seen: set[str] = set()
-
-        for candidate in candidates:
-            query = candidate.strip()
-
-            if not query:
-                continue
-
-            normalized = query.lower()
-
-            if normalized in seen:
-                continue
-
-            seen.add(normalized)
-
-            queries.append(query)
-
-            if len(queries) >= self.max_queries:
-                break
-
-        if not queries:
-            raise ValueError("Task 无法生成 Retrieval Query")
-
-        return queries
+        return [query.text for query in query_specs]

@@ -10,19 +10,6 @@ from agent_core.benchmark.retrieval_model import (
 
 
 class BenchmarkRetrievalEvaluator:
-    """
-    Benchmark Retrieval 自动阅卷器。
-
-    v0.1 只评价核心代码 Retrieval。
-
-    默认参与评分的 Task 类型：
-
-        investigation
-        code_change
-
-    test / verification 暂时不进入
-    核心代码 Retrieval Precision / Recall。
-    """
 
     DEFAULT_SCORED_TASK_TYPES = {
         "investigation",
@@ -35,14 +22,7 @@ class BenchmarkRetrievalEvaluator:
         scored_task_types: set[str] | None = None,
     ) -> None:
 
-        self.scored_task_types = (
-            set(scored_task_types)
-            if scored_task_types is not None
-            else set(self.DEFAULT_SCORED_TASK_TYPES)
-        )
-
-        if not self.scored_task_types:
-            raise ValueError("scored_task_types 不能为空")
+        self.scored_task_types = scored_task_types or self.DEFAULT_SCORED_TASK_TYPES
 
     def evaluate(
         self,
@@ -51,96 +31,86 @@ class BenchmarkRetrievalEvaluator:
         capture: BenchmarkRetrievalCapture,
     ) -> BenchmarkRetrievalEvaluation:
 
-        # ===================================
-        # 1. Hidden Oracle
-        # ===================================
+        oracle = case.retrieval_oracle()
 
-        expected_files = self._normalize_paths(case.expectation.expected_files)
+        required = {
+            self._normalize_path(path) for path in (oracle.required_context_files)
+        }
 
-        forbidden_paths = self._normalize_paths(case.expectation.forbidden_files)
+        useful = {self._normalize_path(path) for path in (oracle.useful_context_files)}
 
-        # ===================================
-        # 2. 收集参与评分的 Retrieval
-        # ===================================
+        forbidden = {
+            self._normalize_path(path) for path in (oracle.forbidden_context_files)
+        }
+
+        # required + useful
+        # 都属于“合理 Context”。
+        relevant = required | useful
 
         retrieved: set[str] = set()
 
-        for task_capture in capture.task_retrievals:
+        for task_retrieval in capture.task_retrievals:
 
-            if task_capture.task_type not in self.scored_task_types:
+            if task_retrieval.task_type not in self.scored_task_types:
                 continue
 
-            for selected_file in task_capture.selected_files:
+            for selected_file in task_retrieval.selected_files:
 
                 retrieved.add(self._normalize_path(selected_file.relative_path))
 
-        retrieved_files = sorted(retrieved)
+        matched_required = required & retrieved
 
-        expected_set = set(expected_files)
+        missed_required = required - retrieved
 
-        retrieved_set = set(retrieved_files)
+        # Precision 不再只认 required。
+        #
+        # useful context 被搜到也是好事。
+        matched_relevant = relevant & retrieved
 
-        # ===================================
-        # 3. Recall
-        # ===================================
+        unexpected = retrieved - relevant
 
-        matched = sorted(expected_set & retrieved_set)
+        forbidden_hits = {
+            path
+            for path in retrieved
+            if self._matches_any_scope(
+                path,
+                forbidden,
+            )
+        }
 
-        missed = sorted(expected_set - retrieved_set)
+        # ---------------------------------
+        # Recall
+        #
+        # 必须找到的文件，
+        # 到底找回来了多少。
+        # ---------------------------------
 
-        if expected_set:
+        if required:
 
-            recall = len(matched) / len(expected_set)
+            recall = len(matched_required) / len(required)
 
         else:
-            # 当前 Case Schema 要求行为标准，
-            # 但 expected_files 可以为空。
-            #
-            # 没有目标文件时，
-            # 文件 Recall 不适用。
-            #
-            # v0.1 记为 1，表示不存在漏检。
+
             recall = 1.0
 
-        # ===================================
-        # 4. Precision
-        # ===================================
+        # ---------------------------------
+        # Precision
+        #
+        # Agent 找回来的一堆文件中，
+        # 有多少是真正有用的。
+        # ---------------------------------
 
-        unexpected = sorted(retrieved_set - expected_set)
+        if retrieved:
 
-        if retrieved_set:
-
-            precision = len(matched) / len(retrieved_set)
+            precision = len(matched_relevant) / len(retrieved)
 
         else:
-            # 如果预期存在文件，
-            # 但一个都没找到，
-            # Precision 定义为 0。
-            #
-            # 如果本来就没有 expected file，
-            # 则没有产生噪声，记为 1。
-            precision = 0.0 if expected_set else 1.0
 
-        # ===================================
-        # 5. Forbidden Path Check
-        # ===================================
-
-        forbidden_hits = sorted(
-            path
-            for path in retrieved_set
-            if self._matches_forbidden(
-                path=path,
-                forbidden_paths=(forbidden_paths),
-            )
-        )
-
-        # ===================================
-        # 6. Failure Taxonomy
-        # ===================================
+            precision = 1.0 if not relevant else 0.0
 
         failure_reasons: list[str] = []
 
-        if missed:
+        if missed_required:
 
             failure_reasons.append("retrieval_miss")
 
@@ -151,10 +121,6 @@ class BenchmarkRetrievalEvaluator:
         if forbidden_hits:
 
             failure_reasons.append("forbidden_scope_retrieval")
-
-        # ===================================
-        # 7. Overall Status
-        # ===================================
 
         if recall == 1.0 and not forbidden_hits:
 
@@ -171,62 +137,51 @@ class BenchmarkRetrievalEvaluator:
         return BenchmarkRetrievalEvaluation(
             status=status,
             scored_task_types=sorted(self.scored_task_types),
-            expected_files=(expected_files),
-            retrieved_files=(retrieved_files),
-            matched_expected_files=(matched),
-            missed_expected_files=(missed),
-            unexpected_files=(unexpected),
-            forbidden_hits=(forbidden_hits),
+            # evaluation_model 暂时继续沿用
+            # v1 字段名，
+            # 避免这一步改动太大。
+            #
+            # 这里的 expected_files
+            # 从现在起表示：
+            # required context files。
+            expected_files=sorted(required),
+            retrieved_files=sorted(retrieved),
+            matched_expected_files=sorted(matched_required),
+            missed_expected_files=sorted(missed_required),
+            unexpected_files=sorted(unexpected),
+            forbidden_hits=sorted(forbidden_hits),
             recall=recall,
             precision=precision,
             failure_reasons=(failure_reasons),
         )
 
     @staticmethod
-    def _normalize_paths(
-        paths: list[str],
-    ) -> list[str]:
-
-        return sorted(
-            {
-                BenchmarkRetrievalEvaluator._normalize_path(path)
-                for path in paths
-                if path.strip()
-            }
-        )
-
-    @staticmethod
     def _normalize_path(
-        path: str,
+        value: str,
     ) -> str:
 
-        normalized = path.strip().replace("\\", "/")
+        return value.replace(
+            "\\",
+            "/",
+        ).strip("/")
 
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-
-        return normalized.rstrip("/")
-
-    @staticmethod
-    def _matches_forbidden(
-        *,
+    @classmethod
+    def _matches_any_scope(
+        cls,
         path: str,
-        forbidden_paths: list[str],
+        scopes: set[str],
     ) -> bool:
 
-        normalized_path = path.rstrip("/")
+        normalized_path = cls._normalize_path(path)
 
-        for forbidden in forbidden_paths:
+        for scope in scopes:
 
-            normalized_forbidden = forbidden.rstrip("/")
+            normalized_scope = cls._normalize_path(scope)
 
-            if not normalized_forbidden:
-                continue
-
-            if normalized_path == normalized_forbidden:
+            if normalized_path == normalized_scope:
                 return True
 
-            if normalized_path.startswith(normalized_forbidden + "/"):
+            if normalized_path.startswith(normalized_scope + "/"):
                 return True
 
         return False

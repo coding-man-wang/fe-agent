@@ -278,6 +278,32 @@ class HybridRelevantFile(BaseModel):
 
     best_semantic_chunk: CodeChunk | None = None
 
+    best_semantic_score: float | None = None
+
+    query_hit_count: int = Field(
+        default=0,
+        ge=0,
+        description=("当前文件被多少个不同 Query 命中"),
+    )
+
+    lexical_hit_count: int = Field(
+        default=0,
+        ge=0,
+        description=("当前文件被 Lexical Retrieval " "命中的 Query 数量"),
+    )
+
+    semantic_hit_count: int = Field(
+        default=0,
+        ge=0,
+        description=("当前文件被 Semantic Retrieval " "命中的 Query 数量"),
+    )
+
+    hybrid_hit_count: int = Field(
+        default=0,
+        ge=0,
+        description=("同一个 Query 下同时被 " "Lexical 和 Semantic 命中的数量"),
+    )
+
     matched_queries: list[str] = Field(
         default_factory=list,
         description="哪些搜索关键词命中了当前文件",
