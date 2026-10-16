@@ -22,6 +22,7 @@ from agent_core.sdd.model import (
     RequirementSpec,
     TaskDefinition,
 )
+from agent_core.codebase.retrieval_rerank import RetrievalRerankService
 
 
 class SemanticCodeSearcher(Protocol):
@@ -62,6 +63,8 @@ class TaskRetrievalService:
         max_files: int = 8,
         max_total_bytes: int = 200_000,
         query_builder: RetrievalQueryBuilder | None = None,
+        rerank_service: RetrievalRerankService | None = None,
+        rerank_candidate_limit: int = 16,
     ) -> None:
 
         if max_queries < 1:
@@ -100,6 +103,9 @@ class TaskRetrievalService:
         self.query_builder = query_builder or RetrievalQueryBuilder(
             max_queries=max_queries
         )
+        self.rerank_service = rerank_service
+
+        self.rerank_candidate_limit = rerank_candidate_limit
 
     async def retrieve(
         self,
@@ -157,13 +163,56 @@ class TaskRetrievalService:
 
             hybrid_responses.append(hybrid)
 
-        return self.selector.select(
+        candidate_limit = (
+            self.rerank_candidate_limit
+            if self.rerank_service is not None
+            else self.max_files
+        )
+
+        selection = self.selector.select(
             index=index,
             hybrid_responses=(hybrid_responses),
             task=task,
-            max_files=self.max_files,
-            max_total_bytes=(self.max_total_bytes),
+            # 有 Reranker 时，
+            # 第一轮先多拿一些候选。
+            max_files=(candidate_limit),
+            max_total_bytes=(self.max_total_bytes * 2),
         )
+
+        if self.rerank_service is None:
+            return selection
+
+        rerank_query = self._select_rerank_query(
+            query_specs=query_specs,
+            task=task,
+        )
+
+        return await self.rerank_service.rerank(
+            query=rerank_query,
+            repository_root=(index.root_path),
+            selection=selection,
+            # 最终仍只返回原来的数量。
+            top_n=self.max_files,
+        )
+
+    @staticmethod
+    def _select_rerank_query(
+        *,
+        query_specs: list[RetrievalQuery],
+        task: TaskDefinition,
+    ) -> str:
+
+        # 优先用户原始需求。
+        for query in query_specs:
+
+            if "raw_requirement" in query.sources:
+                return query.text
+
+        # 其次 Task objective。
+        if task.objective.strip():
+            return task.objective
+
+        return task.title
 
     def build_query_specs(
         self,

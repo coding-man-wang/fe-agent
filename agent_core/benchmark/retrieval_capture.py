@@ -126,6 +126,8 @@ class BenchmarkRetrievalCaptureService:
                     semantic_hit_count=(item.semantic_hit_count),
                     hybrid_hit_count=(item.hybrid_hit_count),
                     reasons=list(item.reasons),
+                    rerank_score=(item.rerank_score),
+                    rerank_rank=(item.rerank_rank),
                 )
                 for item in selection.selected_files
             ]

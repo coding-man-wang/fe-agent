@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "case_id": "CASE-001",
+  "title": "用户资料表单用户名长度限制调整",
+  "category": "single_file_change",
+  "difficulty": "easy",
+  "repository_name": "fe-agent-benchmark-web",
+  "base_commit_sha": "253ad1552a9606c4e6e77435adeed75a53fa2b6a",
+  "requirement": "调整用户资料表单中的用户名校验规则：用户名最大长度修改为 30 个字符。保持项目现有校验与错误提示风格，不修改 API、Router、Store 等无关模块，并保证现有测试和构建继续通过。",
+  "expectation": {
+    "required_context_files": [
+      "src/components/UserProfileForm.vue"
+    ],
+    "useful_context_files": [
+      "tests/unit/UserProfileForm.test.ts",
+      "src/views/UserDetailView.vue",
+      "AGENTS.md"
+    ],
+    "forbidden_context_files": [],
+    "expected_change_files": [
+      "src/components/UserProfileForm.vue"
+    ],
+    "allowed_change_files": [
+      "tests/unit/UserProfileForm.test.ts"
+    ],
+    "forbidden_change_files": [
+      "src/api",
+      "src/router",
+      "src/stores"
+    ],
+    "expected_behaviors": [
+      "用户名最大允许长度为 30 个字符",
+      "超过 30 个字符时使用项目现有表单校验方式阻止提交或显示错误",
+      "API 行为保持不变",
+      "Router 行为保持不变",
+      "现有业务行为不应退化"
+    ],
+    "verification_command_ids": [
+      "frontend-lint",
+      "frontend-typecheck",
+      "frontend-unit-test",
+      "frontend-build"
+    ]
+  }
+}

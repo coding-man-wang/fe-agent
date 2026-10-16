@@ -71,6 +71,13 @@ from agent_core.codebase.openai_embedding import (
 from agent_core.codebase.semantic_search import (
     InMemorySemanticIndex,
 )
+from agent_core.codebase.openai_reranker import (
+    OpenAICompatibleReranker,
+)
+
+from agent_core.codebase.retrieval_rerank import (
+    RetrievalRerankService,
+)
 
 
 def create_benchmark_runner(
@@ -131,6 +138,19 @@ def create_benchmark_runner(
     else:
 
         semantic_searcher = EmptySemanticCodeSearcher()
+    rerank_model = os.getenv("RERANK_MODEL_ID")
+
+    rerank_service = None
+
+    if rerank_model:
+        reranker = OpenAICompatibleReranker(
+            model=rerank_model,
+            api_key=os.getenv("RERANK_API_KEY"),
+            base_url=os.getenv("RERANK_BASE_URL"),
+            request_timeout_seconds=60,
+        )
+
+        rerank_service = RetrievalRerankService(reranker=reranker)
 
     retrieval_service = TaskRetrievalService(
         exact_searcher=(ExactCodeSearcher()),
@@ -142,6 +162,8 @@ def create_benchmark_runner(
         semantic_top_k=8,
         max_files=8,
         max_total_bytes=200_000,
+        rerank_service=(rerank_service),
+        rerank_candidate_limit=16,
     )
 
     retrieval_capture_service = BenchmarkRetrievalCaptureService(

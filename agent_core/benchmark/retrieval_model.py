@@ -60,6 +60,10 @@ class BenchmarkRetrievedFile(BaseModel):
         default_factory=list,
     )
 
+    rerank_score: float | None = None
+
+    rerank_rank: int | None = None
+
     reasons: list[str] = Field(
         default_factory=list,
     )

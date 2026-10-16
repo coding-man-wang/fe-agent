@@ -309,6 +309,13 @@ class HybridRelevantFile(BaseModel):
         description="哪些搜索关键词命中了当前文件",
     )
 
+    rerank_score: float | None = None
+
+    rerank_rank: int | None = Field(
+        default=None,
+        ge=1,
+    )
+
     reasons: list[str] = Field(
         default_factory=list,
         description="为什么选择当前文件",
