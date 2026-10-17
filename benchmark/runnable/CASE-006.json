@@ -5,7 +5,7 @@
   "category": "cross_file_change",
   "difficulty": "medium",
   "repository_name": "fe-agent-benchmark-web",
-  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "base_commit_sha": "716531d63d9103659c8738c8c3dd17ef148c2ebf",
   "requirement": "用户列表需要允许用户选择每页显示 10 条或 20 条数据，默认仍为 10 条。切换每页数量时应回到第一页并重新加载用户列表，同时分页总页数需要正确更新。项目现有查询模型已经具备 pageSize 能力，请优先复用现有实现，不修改 API 请求协议、Mock 服务、Router 或用户筛选组件。",
   "expectation": {
     "required_context_files": [

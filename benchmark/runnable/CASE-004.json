@@ -5,13 +5,14 @@
   "category": "cross_file_change",
   "difficulty": "medium",
   "repository_name": "fe-agent-benchmark-web",
-  "base_commit_sha": "f5c29aac0d6dee053fdf10f6118e82b5adbd17af",
+  "base_commit_sha": "716531d63d9103659c8738c8c3dd17ef148c2ebf",
   "requirement": "用户现在除了 Active 和 Disabled 外，还需要支持 Pending 状态。请让用户列表中的状态筛选能够选择 Pending，并保证本地 Mock 数据中存在一部分 Pending 用户，从而可以实际验证筛选结果。保持现有 Active、Disabled、All statuses 的行为不变，不修改用户 API 请求协议、Router 或分页逻辑。",
   "expectation": {
-    "required_context_files": [
-      "src/types/domain.ts",
-      "src/components/UserFilters.vue",
-      "src/mocks/database.ts"
+    "useful_context_files": [
+      "src/mocks/service.ts",
+      "src/stores/users.ts",
+      "src/views/UsersView.vue",
+      "src/api/users.ts"
     ],
     "useful_context_files": [
       "src/mocks/service.ts",
