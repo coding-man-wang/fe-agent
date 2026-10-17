@@ -10,7 +10,7 @@ class BenchmarkRetrievalQuery(BaseModel):
     Benchmark 记录的一条搜索 Query。
 
     不只是记录搜索了什么，
-    还记录这个 Query 从哪里来。
+    还记录 Query 来源和 Retrieval Intent。
     """
 
     model_config = ConfigDict(
@@ -68,6 +68,14 @@ class BenchmarkRetrievedFile(BaseModel):
         default_factory=list,
     )
 
+    # =====================================
+    # Target Evidence
+    # =====================================
+
+    target_match_type: str = "none"
+
+    target_match_value: str | None = None
+
     context_role: str = "unclassified"
 
     role_reason: str | None = None
@@ -96,6 +104,18 @@ class BenchmarkTaskRetrieval(BaseModel):
 
     title: str
 
+    target_modules: list[str] = Field(
+        default_factory=list,
+    )
+
+    inputs: list[str] = Field(
+        default_factory=list,
+    )
+
+    depends_on: list[str] = Field(
+        default_factory=list,
+    )
+
     # -----------------------------------
     # 兼容旧结构。
     #
@@ -108,9 +128,7 @@ class BenchmarkTaskRetrieval(BaseModel):
     )
 
     # -----------------------------------
-    # v0.2：
-    #
-    # 带来源的 Query 信息。
+    # 带来源 / Kind / Intent 的 Query。
     # -----------------------------------
 
     query_details: list[BenchmarkRetrievalQuery] = Field(

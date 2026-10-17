@@ -74,26 +74,44 @@ class FileRecord(BaseModel):
         description="文件扩展名",
     )
 
-    size_bytes: int = Field(ge=0, description="文件大小")
+    size_bytes: int = Field(
+        ge=0,
+        description="文件大小",
+    )
 
     category: FileCategory = Field(description="文件分类")
 
-    language: str | None = Field(default=None, description="能够识别时记录主要语言")
+    language: str | None = Field(
+        default=None,
+        description="能够识别时记录主要语言",
+    )
 
     is_indexable: bool = Field(description="后续是否允许进入文本检索和 Context")
 
-    skip_reason: str | None = Field(default=None, description="不可索引时记录原因")
+    skip_reason: str | None = Field(
+        default=None,
+        description="不可索引时记录原因",
+    )
 
 
 class RepositoryFileIndex(BaseModel):
     root_path: str
 
-    total_files: int = Field(ge=0)
-    indexable_files: int = Field(ge=0)
+    total_files: int = Field(
+        ge=0,
+    )
 
-    files: list[FileRecord] = Field(default_factory=list)
+    indexable_files: int = Field(
+        ge=0,
+    )
 
-    category_counts: dict[str, int] = Field(default_factory=dict)
+    files: list[FileRecord] = Field(
+        default_factory=list,
+    )
+
+    category_counts: dict[str, int] = Field(
+        default_factory=dict,
+    )
 
 
 SearchMatchType = Literal[
@@ -107,7 +125,9 @@ class ExactSearchMatch(BaseModel):
     match_type: SearchMatchType
 
     line_number: int | None = Field(
-        default=None, ge=1, description="内容匹配时对应的代码行号"
+        default=None,
+        ge=1,
+        description="内容匹配时对应的代码行号",
     )
 
     snippet: str | None = Field(
@@ -121,12 +141,19 @@ class ExactSearchResult(BaseModel):
 
     category: str = Field(description="文件分类")
 
-    language: str | None = Field(default=None, description="文件主要语言")
+    language: str | None = Field(
+        default=None,
+        description="文件主要语言",
+    )
 
-    score: int = Field(ge=0, description="当前结果的确定性相关性评分")
+    score: int = Field(
+        ge=0,
+        description="当前结果的确定性相关性评分",
+    )
 
     matches: list[ExactSearchMatch] = Field(
-        default_factory=list, description="该文件中所有匹配信息"
+        default_factory=list,
+        description="该文件中所有匹配信息",
     )
 
 
@@ -137,9 +164,13 @@ class ExactSearchResponse(BaseModel):
         ge=0,
     )
 
-    matched_files: int = Field(ge=0)
+    matched_files: int = Field(
+        ge=0,
+    )
 
-    results: list[ExactSearchResult] = Field(default_factory=list)
+    results: list[ExactSearchResult] = Field(
+        default_factory=list,
+    )
 
 
 class RelevantFile(BaseModel):
@@ -149,7 +180,9 @@ class RelevantFile(BaseModel):
 
     language: str | None = None
 
-    size_bytes: int = Field(ge=0)
+    size_bytes: int = Field(
+        ge=0,
+    )
 
     score: int = Field(
         ge=0,
@@ -168,15 +201,25 @@ class RelevantFile(BaseModel):
 
 
 class RelevantFileSelection(BaseModel):
-    candidate_count: int = Field(ge=0)
+    candidate_count: int = Field(
+        ge=0,
+    )
 
-    selected_count: int = Field(ge=0)
+    selected_count: int = Field(
+        ge=0,
+    )
 
-    total_selected_bytes: int = Field(ge=0)
+    total_selected_bytes: int = Field(
+        ge=0,
+    )
 
-    selected_files: list[RelevantFile] = Field(default_factory=list)
+    selected_files: list[RelevantFile] = Field(
+        default_factory=list,
+    )
 
-    skipped_by_budget: list[str] = Field(default_factory=list)
+    skipped_by_budget: list[str] = Field(
+        default_factory=list,
+    )
 
 
 class CodeChunk(BaseModel):
@@ -184,9 +227,15 @@ class CodeChunk(BaseModel):
 
     relative_path: str = Field(description="来源文件")
 
-    start_line: int = Field(ge=1, description="起始行")
+    start_line: int = Field(
+        ge=1,
+        description="起始行",
+    )
 
-    end_line: int = Field(ge=1, description="结束行")
+    end_line: int = Field(
+        ge=1,
+        description="结束行",
+    )
 
     content: str = Field(description="Chunk 的代码内容")
 
@@ -204,7 +253,9 @@ class SemanticSearchResult(BaseModel):
 class SemanticSearchResponse(BaseModel):
     query: str
 
-    results: list[SemanticSearchResult] = Field(default_factory=list)
+    results: list[SemanticSearchResult] = Field(
+        default_factory=list,
+    )
 
 
 class HybridFileCandidate(BaseModel):
@@ -233,13 +284,17 @@ class HybridFileCandidate(BaseModel):
         ge=0,
     )
 
-    reasons: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(
+        default_factory=list,
+    )
 
 
 class HybridSearchResponse(BaseModel):
     query: str
 
-    candidates: list[HybridFileCandidate] = Field(default_factory=list)
+    candidates: list[HybridFileCandidate] = Field(
+        default_factory=list,
+    )
 
 
 ContextRole = Literal[
@@ -252,6 +307,14 @@ ContextRole = Literal[
 ]
 
 
+TargetMatchType = Literal[
+    "exact_file",
+    "symbol",
+    "directory",
+    "none",
+]
+
+
 class HybridRelevantFile(BaseModel):
     relative_path: str = Field(description="相关文件路径")
 
@@ -259,7 +322,9 @@ class HybridRelevantFile(BaseModel):
 
     language: str | None = None
 
-    size_bytes: int = Field(ge=0)
+    size_bytes: int = Field(
+        ge=0,
+    )
 
     retrieval_score: float = Field(
         ge=0,
@@ -293,7 +358,7 @@ class HybridRelevantFile(BaseModel):
     query_hit_count: int = Field(
         default=0,
         ge=0,
-        description=("当前文件被多少个不同 Query 命中"),
+        description="当前文件被多少个不同 Query 命中",
     )
 
     lexical_hit_count: int = Field(
@@ -324,6 +389,26 @@ class HybridRelevantFile(BaseModel):
         description=("命中当前文件的 Retrieval Query " "包含哪些搜索意图"),
     )
 
+    # =====================================
+    # Target Evidence
+    #
+    # target_modules 是 Planner 对
+    # Change Surface 的假设。
+    #
+    # 这里把文件和 target_modules
+    # 之间的匹配关系结构化保存。
+    # =====================================
+
+    target_match_type: TargetMatchType = Field(
+        default="none",
+        description=("当前文件与 Task target_modules " "之间的匹配类型"),
+    )
+
+    target_match_value: str | None = Field(
+        default=None,
+        description=("当前文件实际命中的 " "target_modules 原始值"),
+    )
+
     context_role: ContextRole = Field(
         default="unclassified",
         description=("当前文件在本次 Task Context " "中的用途"),
@@ -331,7 +416,7 @@ class HybridRelevantFile(BaseModel):
 
     role_reason: str | None = Field(
         default=None,
-        description=("为什么把当前文件分类为该角色"),
+        description="为什么把当前文件分类为该角色",
     )
 
     rerank_score: float | None = None
@@ -348,16 +433,30 @@ class HybridRelevantFile(BaseModel):
 
 
 class HybridRelevantFileSelection(BaseModel):
-    candidate_count: int = Field(ge=0)
+    candidate_count: int = Field(
+        ge=0,
+    )
 
-    eligible_count: int = Field(ge=0)
+    eligible_count: int = Field(
+        ge=0,
+    )
 
-    selected_count: int = Field(ge=0)
+    selected_count: int = Field(
+        ge=0,
+    )
 
-    total_selected_bytes: int = Field(ge=0)
+    total_selected_bytes: int = Field(
+        ge=0,
+    )
 
-    selected_files: list[HybridRelevantFile] = Field(default_factory=list)
+    selected_files: list[HybridRelevantFile] = Field(
+        default_factory=list,
+    )
 
-    skipped_by_budget: list[str] = Field(default_factory=list)
+    skipped_by_budget: list[str] = Field(
+        default_factory=list,
+    )
 
-    skipped_non_indexable: list[str] = Field(default_factory=list)
+    skipped_non_indexable: list[str] = Field(
+        default_factory=list,
+    )

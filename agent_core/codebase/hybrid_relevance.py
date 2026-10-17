@@ -1,14 +1,17 @@
 from pathlib import PurePosixPath
 
 from agent_core.codebase.model import (
-    RepositoryFileIndex,
-    HybridSearchResponse,
-    HybridRelevantFileSelection,
     HybridRelevantFile,
+    HybridRelevantFileSelection,
+    HybridSearchResponse,
+    RepositoryFileIndex,
+    TargetMatchType,
 )
-from agent_core.sdd.model import TaskDefinition
 from agent_core.codebase.retrieval_query import (
     RetrievalQuery,
+)
+from agent_core.sdd.model import (
+    TaskDefinition,
 )
 
 
@@ -62,6 +65,7 @@ class HybridRelevantFileSelector:
             raise ValueError("policy_weight 不能小于 0")
 
         self.query_rrf_k = query_rrf_k
+
         self.selection_rrf_k = selection_rrf_k
 
         self.retrieval_weight = retrieval_weight
@@ -78,6 +82,7 @@ class HybridRelevantFileSelector:
         max_files: int = 8,
         max_total_bytes: int = 200_000,
     ) -> HybridRelevantFileSelection:
+
         if max_files < 1:
             raise ValueError("max_files 必须 >= 1")
 
@@ -88,14 +93,17 @@ class HybridRelevantFileSelector:
 
         aggregated = self._aggregate_retrieval(
             hybrid_responses,
-            query_specs=query_specs or [],
+            query_specs=(query_specs or []),
         )
 
         candidate_count = len(aggregated)
 
         skipped_non_indexable: list[str] = []
 
-        eligible: dict[str, dict] = {}
+        eligible: dict[
+            str,
+            dict,
+        ] = {}
 
         for path, data in aggregated.items():
             file_record = file_map.get(path)
@@ -108,7 +116,12 @@ class HybridRelevantFileSelector:
 
                 continue
 
-            policy_score, policy_reasons = self._calculate_policy_score(
+            (
+                policy_score,
+                policy_reasons,
+                target_match_type,
+                target_match_value,
+            ) = self._calculate_policy_score(
                 path=path,
                 category=(file_record.category),
                 task=task,
@@ -116,9 +129,11 @@ class HybridRelevantFileSelector:
 
             eligible[path] = {
                 **data,
-                "file_record": file_record,
+                "file_record": (file_record),
                 "policy_score": (policy_score),
                 "policy_reasons": (policy_reasons),
+                "target_match_type": (target_match_type),
+                "target_match_value": (target_match_value),
             }
 
         self._assign_retrieval_ranks(eligible)
@@ -134,6 +149,7 @@ class HybridRelevantFileSelector:
         current_bytes = 0
 
         for file in ranked:
+
             if len(selected) >= max_files:
                 skipped_by_budget.append(file.relative_path)
                 continue
@@ -162,12 +178,14 @@ class HybridRelevantFileSelector:
         *,
         query_specs: list[RetrievalQuery],
     ) -> dict[str, dict]:
+
         intent_map: dict[
             str,
             set[str],
         ] = {}
 
         for query_spec in query_specs:
+
             intents = intent_map.setdefault(
                 query_spec.text,
                 set(),
@@ -187,31 +205,31 @@ class HybridRelevantFileSelector:
                 data = aggregated.setdefault(
                     candidate.relative_path,
                     {
-                        "retrieval_score": 0.0,
+                        "retrieval_score": (0.0),
                         "queries": set(),
                         "intents": set(),
                         "reasons": [],
-                        "best_semantic_chunk": None,
-                        "best_semantic_score": None,
+                        "best_semantic_chunk": (None),
+                        "best_semantic_score": (None),
                         "lexical_hit_count": 0,
                         "semantic_hit_count": 0,
                         "hybrid_hit_count": 0,
                     },
                 )
 
-                # -----------------------------
-                # 关键变化：
-                #
-                # 不再重新只根据 rank
-                # 计算一次 RRF。
-                #
-                # 直接保留 HybridRetriever
-                # 已经计算好的 fusion_score。
-                # -----------------------------
+                # -------------------------
+                # 直接累加 HybridRetriever
+                # 已计算好的 fusion score。
+                # -------------------------
 
                 data["retrieval_score"] += candidate.fusion_score
 
                 data["queries"].add(response.query)
+
+                # -------------------------
+                # Query Intent
+                # 向文件级 Evidence 传播。
+                # -------------------------
 
                 data["intents"].update(
                     intent_map.get(
@@ -219,9 +237,10 @@ class HybridRelevantFileSelector:
                         set(),
                     )
                 )
-                # -----------------------------
-                # 记录搜索证据来自哪里。
-                # -----------------------------
+
+                # -------------------------
+                # Retrieval Signal
+                # -------------------------
 
                 has_lexical = candidate.lexical_rank is not None
 
@@ -236,24 +255,25 @@ class HybridRelevantFileSelector:
                 if has_lexical and has_semantic:
                     data["hybrid_hit_count"] += 1
 
-                # -----------------------------
-                # 保留最强 Semantic Evidence。
-                # -----------------------------
+                # -------------------------
+                # 最强 Semantic Evidence
+                # -------------------------
 
                 if candidate.semantic_score is not None:
-
                     current_best = data["best_semantic_score"]
 
-                    if current_best is None or candidate.semantic_score > current_best:
+                    if current_best is None or (
+                        candidate.semantic_score > current_best
+                    ):
                         data["best_semantic_score"] = candidate.semantic_score
 
                         data["best_semantic_chunk"] = candidate.best_semantic_chunk
 
-                # -----------------------------
+                # -------------------------
                 # Diagnostics
-                # -----------------------------
+                # -------------------------
 
-                evidence = []
+                evidence: list[str] = []
 
                 if has_lexical:
                     evidence.append("lexical")
@@ -265,9 +285,9 @@ class HybridRelevantFileSelector:
                     (
                         "Hybrid Retrieval "
                         f"query={response.query}, "
-                        f"signals="
+                        "signals="
                         f"{'+'.join(evidence)}, "
-                        f"fusion_score="
+                        "fusion_score="
                         f"{candidate.fusion_score:.6f}"
                     )
                 )
@@ -279,19 +299,24 @@ class HybridRelevantFileSelector:
         *,
         path: str,
         target: str,
-    ) -> tuple[int, str | None]:
+    ) -> tuple[
+        int,
+        str | None,
+        TargetMatchType,
+    ]:
         """
-        target_modules 的信息精确程度不同，
-        不能统一 +25。
+        target_modules 的信息精确程度不同。
 
-        精确文件：
+        exact file:
             +25
 
-        文件名 / Symbol：
+        symbol:
             +15
 
-        大目录：
+        directory:
             +5
+
+        同时返回结构化 Target Evidence。
         """
 
         normalized_path = (
@@ -316,6 +341,7 @@ class HybridRelevantFileSelector:
             return (
                 0,
                 None,
+                "none",
             )
 
         target_path = PurePosixPath(normalized_target)
@@ -324,15 +350,9 @@ class HybridRelevantFileSelector:
 
         path_name = PurePosixPath(normalized_path).name
 
-        # ---------------------------------
-        # 情况一：
-        #
-        # 明确文件路径 / 文件名。
-        #
-        # 例如：
-        #
-        # src/components/UserProfileForm.vue
-        # ---------------------------------
+        # ============================
+        # Exact File
+        # ============================
 
         if target_path.suffix:
 
@@ -344,24 +364,18 @@ class HybridRelevantFileSelector:
                 return (
                     25,
                     ("精确匹配 " "target file: " f"{target}"),
+                    "exact_file",
                 )
 
             return (
                 0,
                 None,
+                "none",
             )
 
-        # ---------------------------------
-        # 情况二：
-        #
-        # 看起来是目录。
-        #
-        # src/components
-        # tests/unit
-        #
-        # 这种信息很粗，
-        # 只能轻微加分。
-        # ---------------------------------
+        # ============================
+        # Directory
+        # ============================
 
         if "/" in normalized_target:
 
@@ -370,31 +384,31 @@ class HybridRelevantFileSelector:
             if normalized_path.startswith(directory_prefix):
                 return (
                     5,
-                    ("匹配 target directory: " f"{target}"),
+                    ("匹配 target " "directory: " f"{target}"),
+                    "directory",
                 )
 
             return (
                 0,
                 None,
+                "none",
             )
 
-        # ---------------------------------
-        # 情况三：
-        #
-        # 文件名 / Symbol 名。
-        #
-        # UserProfileForm
-        # ---------------------------------
+        # ============================
+        # Symbol / Basename
+        # ============================
 
         if normalized_target in path_name:
             return (
                 15,
                 ("匹配 target symbol: " f"{target}"),
+                "symbol",
             )
 
         return (
             0,
             None,
+            "none",
         )
 
     def _calculate_policy_score(
@@ -403,7 +417,13 @@ class HybridRelevantFileSelector:
         path: str,
         category: str,
         task: TaskDefinition,
-    ) -> tuple[int, list[str]]:
+    ) -> tuple[
+        int,
+        list[str],
+        TargetMatchType,
+        str | None,
+    ]:
+
         score = 0
 
         reasons: list[str] = []
@@ -417,23 +437,27 @@ class HybridRelevantFileSelector:
         )
 
         if category_bonus:
+
             score += category_bonus
 
             reasons.append(
-                f"{task.task_type} Task " f"对 {category} 文件 " f"+{category_bonus}"
+                (f"{task.task_type} Task " f"对 {category} 文件 " f"+{category_bonus}")
             )
-
-        normalized_path = path.lower()
 
         best_target_bonus = 0
 
-        best_target_reason = None
+        best_target_reason: str | None = None
+
+        best_target_match_type: TargetMatchType = "none"
+
+        best_target_match_value: str | None = None
 
         for target in task.target_modules:
 
             (
                 target_bonus,
                 target_reason,
+                target_match_type,
             ) = self._calculate_target_bonus(
                 path=path,
                 target=target,
@@ -443,6 +467,10 @@ class HybridRelevantFileSelector:
                 best_target_bonus = target_bonus
 
                 best_target_reason = target_reason
+
+                best_target_match_type = target_match_type
+
+                best_target_match_value = target
 
         if best_target_bonus:
 
@@ -454,6 +482,8 @@ class HybridRelevantFileSelector:
         return (
             score,
             reasons,
+            best_target_match_type,
+            best_target_match_value,
         )
 
     def _assign_retrieval_ranks(
@@ -518,6 +548,7 @@ class HybridRelevantFileSelector:
             )
 
             if policy_rank is not None:
+
                 selection_score += self.policy_weight / (
                     self.selection_rrf_k + policy_rank
                 )
@@ -531,22 +562,24 @@ class HybridRelevantFileSelector:
             results.append(
                 HybridRelevantFile(
                     relative_path=path,
-                    category=file_record.category,
-                    language=file_record.language,
-                    size_bytes=file_record.size_bytes,
-                    retrieval_score=data["retrieval_score"],
-                    retrieval_rank=retrieval_rank,
-                    policy_score=data["policy_score"],
-                    policy_rank=policy_rank,
-                    selection_score=selection_score,
-                    best_semantic_chunk=data["best_semantic_chunk"],
-                    best_semantic_score=data["best_semantic_score"],
+                    category=(file_record.category),
+                    language=(file_record.language),
+                    size_bytes=(file_record.size_bytes),
+                    retrieval_score=(data["retrieval_score"]),
+                    retrieval_rank=(retrieval_rank),
+                    policy_score=(data["policy_score"]),
+                    policy_rank=(policy_rank),
+                    selection_score=(selection_score),
+                    best_semantic_chunk=(data["best_semantic_chunk"]),
+                    best_semantic_score=(data["best_semantic_score"]),
                     query_hit_count=len(data["queries"]),
-                    lexical_hit_count=data["lexical_hit_count"],
-                    semantic_hit_count=data["semantic_hit_count"],
-                    hybrid_hit_count=data["hybrid_hit_count"],
+                    lexical_hit_count=(data["lexical_hit_count"]),
+                    semantic_hit_count=(data["semantic_hit_count"]),
+                    hybrid_hit_count=(data["hybrid_hit_count"]),
                     matched_queries=sorted(data["queries"]),
                     matched_intents=sorted(data["intents"]),
+                    target_match_type=(data["target_match_type"]),
+                    target_match_value=(data["target_match_value"]),
                     reasons=reasons,
                 )
             )

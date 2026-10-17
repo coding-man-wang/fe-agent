@@ -43,7 +43,7 @@ class BenchmarkRetrievalCaptureService:
 
         self.repository_root = Path(repository_root).resolve(strict=True)
 
-        if not (self.repository_root.is_dir()):
+        if not self.repository_root.is_dir():
             raise (BenchmarkRetrievalCaptureError("repository_root 不是目录"))
 
         # code_chunker 和 semantic_index
@@ -78,14 +78,13 @@ class BenchmarkRetrievalCaptureService:
     ) -> BenchmarkRetrievalCapture:
 
         # -------------------------------
-        # 1. 建 File Index
+        # 1. File Index
         # -------------------------------
 
         index = self.file_indexer.build(self.repository_root)
 
         # -------------------------------
-        # 2. 确保 Semantic Index
-        #    已经为当前 Commit 构建。
+        # 2. Semantic Index
         # -------------------------------
 
         await self._ensure_semantic_index(
@@ -118,19 +117,21 @@ class BenchmarkRetrievalCaptureService:
                     relative_path=(item.relative_path),
                     category=(item.category),
                     selection_score=(item.selection_score),
-                    matched_queries=list(item.matched_queries),
                     retrieval_score=(item.retrieval_score),
                     best_semantic_score=(item.best_semantic_score),
                     query_hit_count=(item.query_hit_count),
                     lexical_hit_count=(item.lexical_hit_count),
                     semantic_hit_count=(item.semantic_hit_count),
                     hybrid_hit_count=(item.hybrid_hit_count),
-                    reasons=list(item.reasons),
+                    matched_queries=list(item.matched_queries),
                     matched_intents=list(item.matched_intents),
+                    target_match_type=(item.target_match_type),
+                    target_match_value=(item.target_match_value),
                     context_role=(item.context_role),
                     role_reason=(item.role_reason),
                     rerank_score=(item.rerank_score),
                     rerank_rank=(item.rerank_rank),
+                    reasons=list(item.reasons),
                 )
                 for item in selection.selected_files
             ]
@@ -149,7 +150,10 @@ class BenchmarkRetrievalCaptureService:
                 BenchmarkTaskRetrieval(
                     task_id=(task.task_id),
                     task_type=(task.task_type),
-                    title=(task.title),
+                    title=task.title,
+                    target_modules=list(task.target_modules),
+                    inputs=list(task.inputs),
+                    depends_on=list(task.depends_on),
                     queries=[query.text for query in query_specs],
                     query_details=(query_details),
                     selected_files=(selected_files),
@@ -160,7 +164,7 @@ class BenchmarkRetrievalCaptureService:
 
         mode = (
             "hybrid_semantic_intent_v0.4"
-            if self.semantic_index is not None
+            if (self.semantic_index is not None)
             else "lexical_intent_v0.4"
         )
 
