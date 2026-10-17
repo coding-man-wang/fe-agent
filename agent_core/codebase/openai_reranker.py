@@ -69,21 +69,27 @@ class OpenAICompatibleReranker(Reranker):
             raise ValueError("top_n 必须 >= 1")
 
         document_texts = [document.text for document in documents]
-
-        response = await self.client.post(
-            "/reranks",
-            body={
-                "model": self.model,
-                "query": query,
-                "documents": (document_texts),
-                "top_n": min(
-                    top_n,
-                    len(documents),
-                ),
-                "instruct": (self.instruct),
-            },
-            cast_to=object,
-        )
+        try:
+            response = await self.client.post(
+                "/reranks",
+                body={
+                    "model": self.model,
+                    "query": query,
+                    "documents": (document_texts),
+                    "top_n": min(
+                        top_n,
+                        len(documents),
+                    ),
+                    "instruct": (self.instruct),
+                },
+                cast_to=object,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Rerank request failed: "
+                f"model={self.model}, "
+                f"documents={len(documents)}"
+            ) from exc
 
         payload = self._to_dict(response)
 

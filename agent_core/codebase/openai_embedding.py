@@ -89,11 +89,18 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
             batch = texts[start : start + self.batch_size]
 
-            response = await self.client.embeddings.create(
-                model=self.model,
-                input=batch,
-                encoding_format="float",
-            )
+            try:
+                response = await self.client.embeddings.create(
+                    model=self.model,
+                    input=batch,
+                )
+
+            except Exception as exc:
+                raise RuntimeError(
+                    "Embedding request failed: "
+                    f"model={self.model}, "
+                    f"batch_size={len(batch)}"
+                ) from exc
 
             # 根据 index 排序，
             # 确保结果与输入顺序一致。
