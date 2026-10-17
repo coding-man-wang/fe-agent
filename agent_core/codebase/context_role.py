@@ -82,116 +82,85 @@ class ContextRoleClassifier:
 
         intents = set(item.matched_intents)
 
-        # ==============================
-        # 1. Test Context
-        # ==============================
-
+        # 1. Test
         if item.category == "test":
-
             return (
                 "test",
-                ("文件 category=test，" "作为测试上下文使用"),
+                "文件 category=test",
             )
 
-        # ==============================
-        # 2. Project Policy
-        # ==============================
-
+        # 2. Policy
         if "project_policy" in intents and item.category in {
             "config",
             "documentation",
         }:
-
             return (
                 "policy",
-                ("由 project_policy " "Intent 命中配置/文档文件"),
+                ("由 project_policy " "Intent 命中"),
             )
 
-        # ==============================
-        # 3. Explicit Target
-        # ==============================
-
+        # 3. Explicit strong target
         target = self._find_strong_target(
             path=item.relative_path,
             targets=task.target_modules,
         )
 
         if target is not None:
-
             return (
                 "implementation_target",
-                ("文件与 Task target_modules " f"强匹配: {target}"),
+                ("与 target_modules " f"强匹配: {target}"),
             )
 
-        # ==============================
-        # 4. Code Change Top Evidence
-        #
-        # Planner 不一定能精确给出文件。
-        # 对 code_change Task，
-        # 高排名 implementation query
-        # 可以作为 target 候选。
-        # ==============================
+        # 4. Investigation
+        if (
+            task.task_type == "investigation"
+            and item.category
+            in {
+                "source",
+                "config",
+            }
+            and (
+                "dependency_context" in intents or "implementation_location" in intents
+            )
+        ):
+            return (
+                "dependency",
+                ("investigation Task 中 " "被实现/依赖查询命中"),
+            )
 
+        # 5. Code change provisional
         if (
             task.task_type == "code_change"
             and "implementation_location" in intents
             and item.rerank_rank is not None
-            and item.rerank_rank <= 3
+            and item.rerank_rank <= 2
         ):
-
             return (
                 "implementation_target",
-                (
-                    "code_change Task 中被 "
-                    "implementation_location 命中，"
-                    "且 rerank_rank <= 3"
-                ),
+                ("code_change Task 中 " "implementation_location " "高排名候选"),
             )
 
-        # ==============================
-        # 5. Similar Implementation
-        # ==============================
-
-        if "similar_implementation" in intents:
-
-            return (
-                "reference",
-                ("由 similar_implementation " "Intent 命中"),
-            )
-
-        # ==============================
-        # 6. Dependency Context
-        # ==============================
-
+        # 6. Dependency
         if "dependency_context" in intents:
-
             return (
                 "dependency",
                 ("由 dependency_context " "Intent 命中"),
             )
 
-        # ==============================
-        # 7. Investigation 本身就是
-        #    理解依赖/现状
-        # ==============================
-
-        if task.task_type == "investigation" and item.category in {
-            "source",
-            "config",
-        }:
-
+        # 7. Reference
+        if (
+            "similar_implementation" in intents
+            and "implementation_location" not in intents
+            and "dependency_context" not in intents
+        ):
             return (
-                "dependency",
-                ("investigation Task " "中的源码上下文"),
+                "reference",
+                ("主要由 " "similar_implementation " "Intent 命中"),
             )
-
-        # ==============================
-        # 8. Unknown
-        # ==============================
 
         return (
             "unclassified",
-            ("当前证据不足以确定 " "Context Role"),
+            "当前证据不足",
         )
 
     @staticmethod

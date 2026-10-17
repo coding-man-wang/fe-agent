@@ -213,6 +213,12 @@ class HybridRelevantFileSelector:
 
                 data["queries"].add(response.query)
 
+                data["intents"].update(
+                    intent_map.get(
+                        response.query,
+                        set(),
+                    )
+                )
                 # -----------------------------
                 # 记录搜索证据来自哪里。
                 # -----------------------------
