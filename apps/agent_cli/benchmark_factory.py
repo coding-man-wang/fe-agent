@@ -78,6 +78,9 @@ from agent_core.codebase.openai_reranker import (
 from agent_core.codebase.retrieval_rerank import (
     RetrievalRerankService,
 )
+from agent_core.codebase.context_role import (
+    ContextRoleClassifier,
+)
 
 
 def create_benchmark_runner(
@@ -164,6 +167,7 @@ def create_benchmark_runner(
         max_total_bytes=200_000,
         rerank_service=(rerank_service),
         rerank_candidate_limit=16,
+        context_role_classifier=(ContextRoleClassifier()),
     )
 
     retrieval_capture_service = BenchmarkRetrievalCaptureService(
@@ -175,7 +179,7 @@ def create_benchmark_runner(
     )
 
     return BenchmarkRunner(
-        case_loader=(BenchmarkCaseLoader(fe_agent_root / "benchmark" / "cases")),
+        case_loader=(BenchmarkCaseLoader(fe_agent_root / "benchmark")),
         repository_guard=(
             BenchmarkRepositoryGuard(repository_root=(benchmark_repository))
         ),

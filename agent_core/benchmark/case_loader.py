@@ -21,10 +21,15 @@ class BenchmarkCaseLoader:
 
         self.case_root = Path(case_root).resolve(strict=True)
 
-        self.runnable_root = self.case_root / "runnable"
-
         if not self.case_root.is_dir():
             raise BenchmarkCaseLoadError("case_root 不是目录")
+
+        self.runnable_root = self.case_root / "runnable"
+
+        if not (self.runnable_root.is_dir()):
+            raise BenchmarkCaseLoadError(
+                "runnable 目录不存在: " f"{self.runnable_root}"
+            )
 
     def load(
         self,

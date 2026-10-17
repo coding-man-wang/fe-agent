@@ -126,6 +126,9 @@ class BenchmarkRetrievalCaptureService:
                     semantic_hit_count=(item.semantic_hit_count),
                     hybrid_hit_count=(item.hybrid_hit_count),
                     reasons=list(item.reasons),
+                    matched_intents=list(item.matched_intents),
+                    context_role=(item.context_role),
+                    role_reason=(item.role_reason),
                     rerank_score=(item.rerank_score),
                     rerank_rank=(item.rerank_rank),
                 )
@@ -137,6 +140,7 @@ class BenchmarkRetrievalCaptureService:
                     text=query.text,
                     sources=list(query.sources),
                     kinds=list(query.kinds),
+                    intents=list(query.intents),
                 )
                 for query in query_specs
             ]
@@ -155,9 +159,9 @@ class BenchmarkRetrievalCaptureService:
             )
 
         mode = (
-            "hybrid_semantic_v0.1"
+            "hybrid_semantic_intent_v0.4"
             if self.semantic_index is not None
-            else "lexical_requirement_aware_v0.2"
+            else "lexical_intent_v0.4"
         )
 
         return BenchmarkRetrievalCapture(

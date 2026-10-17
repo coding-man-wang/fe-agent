@@ -242,6 +242,16 @@ class HybridSearchResponse(BaseModel):
     candidates: list[HybridFileCandidate] = Field(default_factory=list)
 
 
+ContextRole = Literal[
+    "implementation_target",
+    "dependency",
+    "reference",
+    "test",
+    "policy",
+    "unclassified",
+]
+
+
 class HybridRelevantFile(BaseModel):
     relative_path: str = Field(description="相关文件路径")
 
@@ -307,6 +317,21 @@ class HybridRelevantFile(BaseModel):
     matched_queries: list[str] = Field(
         default_factory=list,
         description="哪些搜索关键词命中了当前文件",
+    )
+
+    matched_intents: list[str] = Field(
+        default_factory=list,
+        description=("命中当前文件的 Retrieval Query " "包含哪些搜索意图"),
+    )
+
+    context_role: ContextRole = Field(
+        default="unclassified",
+        description=("当前文件在本次 Task Context " "中的用途"),
+    )
+
+    role_reason: str | None = Field(
+        default=None,
+        description=("为什么把当前文件分类为该角色"),
     )
 
     rerank_score: float | None = None

@@ -7,6 +7,9 @@ from agent_core.codebase.model import (
     HybridRelevantFile,
 )
 from agent_core.sdd.model import TaskDefinition
+from agent_core.codebase.retrieval_query import (
+    RetrievalQuery,
+)
 
 
 class HybridRelevantFileSelector:
@@ -71,6 +74,7 @@ class HybridRelevantFileSelector:
         index: RepositoryFileIndex,
         hybrid_responses: list[HybridSearchResponse],
         task: TaskDefinition,
+        query_specs: list[RetrievalQuery] | None = None,
         max_files: int = 8,
         max_total_bytes: int = 200_000,
     ) -> HybridRelevantFileSelection:
@@ -82,7 +86,10 @@ class HybridRelevantFileSelector:
 
         file_map = {file.relative_path: file for file in index.files}
 
-        aggregated = self._aggregate_retrieval(hybrid_responses)
+        aggregated = self._aggregate_retrieval(
+            hybrid_responses,
+            query_specs=query_specs or [],
+        )
 
         candidate_count = len(aggregated)
 
@@ -152,7 +159,21 @@ class HybridRelevantFileSelector:
     def _aggregate_retrieval(
         self,
         responses: list[HybridSearchResponse],
+        *,
+        query_specs: list[RetrievalQuery],
     ) -> dict[str, dict]:
+        intent_map: dict[
+            str,
+            set[str],
+        ] = {}
+
+        for query_spec in query_specs:
+            intents = intent_map.setdefault(
+                query_spec.text,
+                set(),
+            )
+
+            intents.update(query_spec.intents)
 
         aggregated: dict[
             str,
@@ -168,6 +189,7 @@ class HybridRelevantFileSelector:
                     {
                         "retrieval_score": 0.0,
                         "queries": set(),
+                        "intents": set(),
                         "reasons": [],
                         "best_semantic_chunk": None,
                         "best_semantic_score": None,
@@ -503,21 +525,22 @@ class HybridRelevantFileSelector:
             results.append(
                 HybridRelevantFile(
                     relative_path=path,
-                    category=(file_record.category),
-                    language=(file_record.language),
-                    size_bytes=(file_record.size_bytes),
-                    retrieval_score=(data["retrieval_score"]),
-                    retrieval_rank=(retrieval_rank),
-                    policy_score=(data["policy_score"]),
-                    policy_rank=(policy_rank),
-                    selection_score=(selection_score),
-                    best_semantic_chunk=(data["best_semantic_chunk"]),
-                    best_semantic_score=(data["best_semantic_score"]),
+                    category=file_record.category,
+                    language=file_record.language,
+                    size_bytes=file_record.size_bytes,
+                    retrieval_score=data["retrieval_score"],
+                    retrieval_rank=retrieval_rank,
+                    policy_score=data["policy_score"],
+                    policy_rank=policy_rank,
+                    selection_score=selection_score,
+                    best_semantic_chunk=data["best_semantic_chunk"],
+                    best_semantic_score=data["best_semantic_score"],
                     query_hit_count=len(data["queries"]),
-                    lexical_hit_count=(data["lexical_hit_count"]),
-                    semantic_hit_count=(data["semantic_hit_count"]),
-                    hybrid_hit_count=(data["hybrid_hit_count"]),
+                    lexical_hit_count=data["lexical_hit_count"],
+                    semantic_hit_count=data["semantic_hit_count"],
+                    hybrid_hit_count=data["hybrid_hit_count"],
                     matched_queries=sorted(data["queries"]),
+                    matched_intents=sorted(data["intents"]),
                     reasons=reasons,
                 )
             )

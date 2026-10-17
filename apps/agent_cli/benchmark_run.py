@@ -21,13 +21,14 @@ async def main():
         benchmark_repository=(benchmark_repository),
     )
 
-    result = await runner.run(case_id="CASE-004")
+    result = await runner.run(case_id="CASE-006")
 
     print(
         result.model_dump_json(
             indent=2,
         )
     )
+    print(result.run_id)
 
 
 if __name__ == "__main__":

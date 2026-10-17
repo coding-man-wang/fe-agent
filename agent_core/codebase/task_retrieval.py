@@ -23,6 +23,9 @@ from agent_core.sdd.model import (
     TaskDefinition,
 )
 from agent_core.codebase.retrieval_rerank import RetrievalRerankService
+from agent_core.codebase.context_role import (
+    ContextRoleClassifier,
+)
 
 
 class SemanticCodeSearcher(Protocol):
@@ -65,6 +68,7 @@ class TaskRetrievalService:
         query_builder: RetrievalQueryBuilder | None = None,
         rerank_service: RetrievalRerankService | None = None,
         rerank_candidate_limit: int = 16,
+        context_role_classifier: ContextRoleClassifier | None = None,
     ) -> None:
 
         if max_queries < 1:
@@ -106,6 +110,8 @@ class TaskRetrievalService:
         self.rerank_service = rerank_service
 
         self.rerank_candidate_limit = rerank_candidate_limit
+
+        self.context_role_classifier = context_role_classifier
 
     async def retrieve(
         self,
@@ -173,26 +179,32 @@ class TaskRetrievalService:
             index=index,
             hybrid_responses=(hybrid_responses),
             task=task,
-            # 有 Reranker 时，
-            # 第一轮先多拿一些候选。
-            max_files=(candidate_limit),
+            query_specs=query_specs,
+            max_files=candidate_limit,
             max_total_bytes=(self.max_total_bytes * 2),
         )
 
         if self.rerank_service is None:
-            return selection
+            return self._classify_roles(
+                selection=selection,
+                task=task,
+            )
 
         rerank_query = self._select_rerank_query(
             query_specs=query_specs,
             task=task,
         )
 
-        return await self.rerank_service.rerank(
+        reranked = await self.rerank_service.rerank(
             query=rerank_query,
             repository_root=(index.root_path),
             selection=selection,
-            # 最终仍只返回原来的数量。
             top_n=self.max_files,
+        )
+
+        return self._classify_roles(
+            selection=reranked,
+            task=task,
         )
 
     @staticmethod
@@ -251,3 +263,18 @@ class TaskRetrievalService:
         )
 
         return [query.text for query in query_specs]
+
+    def _classify_roles(
+        self,
+        *,
+        selection: HybridRelevantFileSelection,
+        task: TaskDefinition,
+    ) -> HybridRelevantFileSelection:
+
+        if self.context_role_classifier is None:
+            return selection
+
+        return self.context_role_classifier.classify_selection(
+            selection=selection,
+            task=task,
+        )

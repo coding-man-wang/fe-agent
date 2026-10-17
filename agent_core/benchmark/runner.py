@@ -349,10 +349,26 @@ class BenchmarkRunner:
                 update={
                     "status": "failed",
                     "finished_at": (utc_now()),
-                    "error": (f"{type(exc).__name__}: " f"{exc}"),
+                    "error": (self.format_exception_chain(exc)),
                 },
             )
 
             self.run_store.save(failed)
 
             return failed
+
+    @staticmethod
+    def format_exception_chain(
+        exc: BaseException,
+    ) -> str:
+
+        messages: list[str] = []
+
+        current: BaseException | None = exc
+
+        while current is not None:
+            messages.append(f"{type(current).__name__}: " f"{current}")
+
+            current = current.__cause__ or current.__context__
+
+        return "\nCaused by: ".join(messages)

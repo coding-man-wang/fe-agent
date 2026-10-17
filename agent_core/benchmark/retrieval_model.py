@@ -27,6 +27,10 @@ class BenchmarkRetrievalQuery(BaseModel):
         default_factory=list,
     )
 
+    intents: list[str] = Field(
+        default_factory=list,
+    )
+
 
 class BenchmarkRetrievedFile(BaseModel):
     """
@@ -59,6 +63,14 @@ class BenchmarkRetrievedFile(BaseModel):
     matched_queries: list[str] = Field(
         default_factory=list,
     )
+
+    matched_intents: list[str] = Field(
+        default_factory=list,
+    )
+
+    context_role: str = "unclassified"
+
+    role_reason: str | None = None
 
     rerank_score: float | None = None
 
