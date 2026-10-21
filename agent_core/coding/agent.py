@@ -54,10 +54,18 @@ JSON 必须符合以下结构：
   "verification_plan": [
     "建议执行的验证步骤"
   ],
-  "missing_information": [
-    "仍然缺少的信息"
-  ],
-  "execution_status": "not_executed"
+  "missing_information": [],
+"evidence_gaps": [
+  {
+    "description": "缺少的具体信息",
+    "severity": "blocking 或 advisory",
+    "related_paths": [
+      "相关文件路径"
+    ],
+    "reason": "为什么它会或不会阻塞当前修改决策"
+  }
+],
+"execution_status": "not_executed"
 }
 
 要求：
@@ -67,6 +75,30 @@ JSON 必须符合以下结构：
    应放入 missing_information。
 4. 只提出修改方案，不声称已经修改或测试。
 5. 不要输出工具调用或可执行动作指令。
+6. 新输出优先使用 evidence_gaps，
+   missing_information 保持为空数组。
+
+7. severity = blocking：
+   缺少该信息会导致你无法可靠判断：
+   - 当前 implementation target 是否需要修改；
+   - 应该如何安全修改；
+   - 修改是否违反明确的接口/业务约束。
+
+8. severity = advisory：
+   信息虽然有帮助，但不影响当前是否需要修改的判断。
+   常见情况包括：
+   - reference 文件未完整提供；
+   - 测试覆盖情况未知；
+   - 测试或构建尚未执行；
+   - 缺少运行时日志，但静态代码已经足够判断修改方案。
+
+9. 如果你认为某条缺失信息“不阻塞当前任务判断”，
+   必须将其标记为 advisory，
+   不要标记为 blocking。
+
+10. 不要因为尚未运行测试、构建或运行时验证，
+    就把 Evidence Gap 标记为 blocking。
+    实际执行验证由后续 Verification Gate 负责。
 """.strip()
 
     def __init__(
