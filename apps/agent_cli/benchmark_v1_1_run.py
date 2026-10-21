@@ -1,0 +1,283 @@
+import argparse
+import asyncio
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from agent_core.artifacts.store import JsonTaskArtifactStore
+from agent_core.benchmark.change_surface_evaluator import ChangeSurfaceEvaluator
+from agent_core.benchmark.full_execution import FullExecutionBenchmarkService
+from agent_core.benchmark.prepared_execution import (
+    HistoricalPreparedExecutionFinder,
+    PreparedExecutionInput,
+    PreparedExecutionInputStore,
+)
+from agent_core.benchmark.workspace_dependencies import NodeModulesWorkspaceProvisioner
+from agent_core.change_surface.aggregate import ChangeSurfaceAggregator
+from agent_core.change_surface.investigation import InvestigationArtifactBuilder
+from agent_core.change_surface.model import ResolvedChangeSurface
+from agent_core.change_surface.resolver import ChangeSurfaceResolver
+from agent_core.codebase.file_index import RepositoryFileIndexer
+from agent_core.codebase.model import RepositoryProfile
+from agent_core.context.builder import ProjectContextBuilder
+from agent_core.harness.coordinator import HarnessV1Coordinator
+from agent_core.harness.trace import JsonlHarnessTraceStore
+from agent_core.sdd.task_graph import topological_sort_tasks
+from apps.agent_cli.benchmark_factory import create_benchmark_runner
+
+load_dotenv()
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="FE-Agent v1.1 Full Execution Benchmark"
+    )
+    parser.add_argument(
+        "--refresh-upstream",
+        action="store_true",
+        help=(
+            "重新运行 Planning/Retrieval/Investigation/Change Surface。"
+            "默认 v1.1 会复用已经通过 v1.0 Gate 的 Prepared Execution Input。"
+        ),
+    )
+    return parser.parse_args()
+
+
+def _repository_profile(*, baseline, benchmark_repository: Path) -> RepositoryProfile:
+    project = baseline.project_context
+    if project is None:
+        raise RuntimeError("Baseline record 缺少 project_context")
+    return RepositoryProfile(
+        project_name=project.project_name,
+        root_path=str(benchmark_repository),
+        framework=project.framework,
+        language=project.language,
+        build_tool=project.build_tool,
+        package_manager=project.package_manager,
+        state_management=project.state_management,
+        test_stack=list(project.test_stack),
+    )
+
+
+def _coordinator_for_baseline(*, fe_agent_root: Path, baseline_run_id: str, llm):
+    harness_root = (
+        fe_agent_root / ".fe-agent" / "benchmark" / "harness" / baseline_run_id
+    )
+    return HarnessV1Coordinator(
+        store=JsonTaskArtifactStore(root=harness_root / "artifacts"),
+        investigation_builder=InvestigationArtifactBuilder(llm=llm),
+        surface_resolver=ChangeSurfaceResolver(llm=llm),
+        # Reused Prepared Input is immutable upstream evidence for v1.1.
+        # Do not append v1.1 execution trace into the historical v1.0 trace.
+        trace_store=None,
+    )
+
+
+async def _prepare_fresh(*, runner, case, benchmark_repository: Path, fe_agent_root: Path):
+    baseline = await runner.run(case_id=case.case_id)
+    if baseline.status != "completed":
+        raise RuntimeError(
+            "Baseline Benchmark 未完成: "
+            f"run_id={baseline.run_id}, stage={baseline.stage}, error={baseline.error}"
+        )
+    if not all(
+        [
+            baseline.task_plan,
+            baseline.requirement_spec,
+            baseline.technical_spec,
+            baseline.project_context,
+            baseline.retrieval_capture,
+        ]
+    ):
+        raise RuntimeError("Baseline record 缺少 v1.1 所需结构化数据")
+
+    repository = _repository_profile(
+        baseline=baseline,
+        benchmark_repository=benchmark_repository,
+    )
+    capture_service = runner.retrieval_capture_service
+    retrieval_service = capture_service.retrieval_service
+    index = capture_service.file_indexer.build(benchmark_repository)
+    llm = runner.requirement_analyzer.llm
+
+    harness_root = (
+        fe_agent_root / ".fe-agent" / "benchmark" / "harness" / baseline.run_id
+    )
+    coordinator = HarnessV1Coordinator(
+        store=JsonTaskArtifactStore(root=harness_root / "artifacts"),
+        investigation_builder=InvestigationArtifactBuilder(llm=llm),
+        surface_resolver=ChangeSurfaceResolver(llm=llm),
+        trace_store=JsonlHarnessTraceStore(path=harness_root / "trace.jsonl"),
+    )
+    base_context_builder = ProjectContextBuilder()
+
+    task_surfaces: dict[str, ResolvedChangeSurface] = {}
+    task_selections = {}
+    surfaces: list[ResolvedChangeSurface] = []
+
+    for task in topological_sort_tasks(baseline.task_plan):
+        if task.task_type == "verification":
+            continue
+        query_specs = retrieval_service.build_query_specs(
+            task=task,
+            raw_requirement=case.requirement,
+            requirement_spec=baseline.requirement_spec,
+        )
+        selection = await retrieval_service.retrieve(
+            task=task,
+            index=index,
+            query_specs=query_specs,
+        )
+        task_selections[task.task_id] = selection
+        bundle = base_context_builder.build(
+            repository_root=benchmark_repository,
+            requirement=baseline.requirement_spec,
+            technical_spec=baseline.technical_spec,
+            task=task,
+            repository=repository,
+            selection=selection,
+            engineering_rules=list(baseline.project_context.engineering_rules),
+            max_files=8,
+            max_total_chars=40_000,
+            max_chars_per_file=10_000,
+        )
+        if task.task_type == "investigation":
+            await coordinator.record_investigation(bundle=bundle)
+            continue
+        surface = await coordinator.resolve_change_surface(
+            bundle=bundle,
+            selection=selection,
+            task_plan=baseline.task_plan,
+        )
+        task_surfaces[task.task_id] = surface
+        surfaces.append(surface)
+
+    combined = ChangeSurfaceAggregator().combine(
+        task_id=case.case_id,
+        surfaces=surfaces,
+        task_plan=baseline.task_plan,
+    )
+    evaluation = ChangeSurfaceEvaluator().evaluate(case=case, surface=combined)
+    print("=== Change Surface Evaluation (fresh upstream) ===")
+    print(evaluation.model_dump_json(indent=2))
+    if evaluation.status != "passed":
+        raise RuntimeError(
+            "Change Surface 未通过；本次 fresh upstream 不会覆盖已冻结的 Prepared Input"
+        )
+
+    prepared = PreparedExecutionInput(
+        case_id=case.case_id,
+        base_commit_sha=case.base_commit_sha,
+        baseline_run_id=baseline.run_id,
+        source="fresh_passed_surface",
+        surface_evaluation=evaluation,
+        task_surfaces=task_surfaces,
+        task_selections=task_selections,
+    )
+    return prepared
+
+
+async def main():
+    args = _parse_args()
+    fe_agent_root = Path(__file__).resolve().parents[2]
+    benchmark_repository = Path(r"D:\project\fe-agent-benchmark-web")
+    case_id = "CASE-006"
+
+    dependency_preflight = NodeModulesWorkspaceProvisioner(
+        dependency_source_root=benchmark_repository
+    )
+    dependency_preflight.require_source_ready()
+    print("=== Full Execution Environment Preflight ===")
+    print("node/npm: ready")
+    print("node_modules verification binaries: ready")
+
+    runner = create_benchmark_runner(
+        fe_agent_root=fe_agent_root,
+        benchmark_repository=benchmark_repository,
+    )
+    case = runner.case_loader.load(case_id)
+    prepared_store = PreparedExecutionInputStore(fe_agent_root=fe_agent_root)
+    repository_index = RepositoryFileIndexer().build(benchmark_repository)
+
+    prepared = None
+    if not args.refresh_upstream:
+        prepared = prepared_store.load_optional(case=case)
+        if prepared is None:
+            prepared = HistoricalPreparedExecutionFinder(
+                fe_agent_root=fe_agent_root,
+                repository_index=repository_index,
+            ).find_latest_passed(case=case)
+            if prepared is not None:
+                prepared_store.save(prepared)
+
+    if prepared is None:
+        if not args.refresh_upstream:
+            print(
+                "没有找到历史 passed Prepared Input；"
+                "将执行一次 fresh upstream，只有通过 Gate 才会冻结。"
+            )
+        prepared = await _prepare_fresh(
+            runner=runner,
+            case=case,
+            benchmark_repository=benchmark_repository,
+            fe_agent_root=fe_agent_root,
+        )
+        prepared_store.save(prepared)
+
+    prepared.validate_for_case(case)
+    print("=== Prepared Execution Input ===")
+    print(f"source={prepared.source}")
+    print(f"baseline_run_id={prepared.baseline_run_id}")
+    print(f"base_commit_sha={prepared.base_commit_sha}")
+    print(
+        "change_surface="
+        f"{prepared.surface_evaluation.status}, "
+        f"recall={prepared.surface_evaluation.target_recall}, "
+        f"precision={prepared.surface_evaluation.target_precision}"
+    )
+
+    baseline = runner.run_store.load(prepared.baseline_run_id)
+    if not all(
+        [
+            baseline.task_plan,
+            baseline.requirement_spec,
+            baseline.technical_spec,
+            baseline.project_context,
+        ]
+    ):
+        raise RuntimeError("Prepared baseline record 缺少结构化数据")
+
+    llm = runner.requirement_analyzer.llm
+    repository = _repository_profile(
+        baseline=baseline,
+        benchmark_repository=benchmark_repository,
+    )
+    coordinator = _coordinator_for_baseline(
+        fe_agent_root=fe_agent_root,
+        baseline_run_id=prepared.baseline_run_id,
+        llm=llm,
+    )
+
+    print("=== Full Execution Benchmark ===")
+    execution = await FullExecutionBenchmarkService(
+        fe_agent_root=fe_agent_root,
+        benchmark_repository=benchmark_repository,
+        baseline_run_id=prepared.baseline_run_id,
+        llm=llm,
+        coordinator=coordinator,
+    ).run(
+        case=case,
+        task_plan=baseline.task_plan,
+        requirement=baseline.requirement_spec,
+        technical_spec=baseline.technical_spec,
+        repository=repository,
+        engineering_rules=list(baseline.project_context.engineering_rules),
+        task_surfaces=prepared.task_surfaces,
+        task_selections=prepared.task_selections,
+    )
+    print(execution.model_dump_json(indent=2))
+    print(f"full_execution_run_id={execution.run_id}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
