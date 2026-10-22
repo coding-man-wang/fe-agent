@@ -19,7 +19,15 @@ from agent_core.coding.patch_generation_model import FilePatchProposal
 from agent_core.coding.patch_model import PatchPlan
 from agent_core.harness.model import HarnessDecision, HarnessPolicy
 from agent_core.harness.trace import HarnessTraceEvent, JsonlHarnessTraceStore
-from agent_core.sdd.model import RequirementSpec, TaskPlan, TechnicalSpec
+from agent_core.sdd.model import (
+    RequirementSpec,
+    TaskDefinition,
+    TaskPlan,
+    TechnicalSpec,
+)
+from agent_core.artifacts.execution_model import (
+    TaskExecutionArtifact,
+)
 
 
 class HarnessV1Coordinator:
@@ -45,7 +53,9 @@ class HarnessV1Coordinator:
         self.policy = policy or HarnessPolicy()
         self.trace_store = trace_store
 
-    def _trace(self, *, task_id: str, event_type: str, data: dict | None = None) -> None:
+    def _trace(
+        self, *, task_id: str, event_type: str, data: dict | None = None
+    ) -> None:
         if self.trace_store is None:
             return
         self.trace_store.append(
@@ -86,7 +96,10 @@ class HarnessV1Coordinator:
             task=bundle.task,
             task_plan=task_plan,
         )
-
+        executions = self.artifact_resolver.upstream_executions(
+            task=bundle.task,
+            task_plan=task_plan,
+        )
         expected_investigation_ids = (
             self.artifact_resolver.upstream_investigation_task_ids(
                 task=bundle.task,
@@ -105,16 +118,11 @@ class HarnessV1Coordinator:
             and bundle.task.task_type == "code_change"
             and (
                 missing_investigation_ids
-                or (
-                    task_plan is None
-                    and bundle.task.depends_on
-                    and not investigations
-                )
+                or (task_plan is None and bundle.task.depends_on and not investigations)
             )
         ):
             available = [
-                f"{item.task_id}:{item.artifact_type}"
-                for item in self.store.list()
+                f"{item.task_id}:{item.artifact_type}" for item in self.store.list()
             ]
             raise RuntimeError(
                 "code_change Task 缺少上游 InvestigationArtifact; "
@@ -129,6 +137,7 @@ class HarnessV1Coordinator:
             bundle=bundle,
             selection=selection,
             upstream_investigations=investigations,
+            upstream_executions=executions,
         )
         if self.policy.fail_on_unresolved_surface and surface.unresolved:
             raise RuntimeError("ResolvedChangeSurface 仍包含 unresolved 项")
@@ -185,7 +194,9 @@ class HarnessV1Coordinator:
         self._trace(
             task_id=bundle.task.task_id,
             event_type="context_refined",
-            data={"context_files": [item.relative_path for item in resolved.code_context]},
+            data={
+                "context_files": [item.relative_path for item in resolved.code_context]
+            },
         )
         return resolved
 
@@ -196,7 +207,10 @@ class HarnessV1Coordinator:
         surface: ResolvedChangeSurface,
     ) -> HarnessDecision:
         result = self.scope_guard.evaluate_plan(plan=plan, surface=surface)
-        if self.policy.require_change_surface_before_patch and plan.task_id != surface.task_id:
+        if (
+            self.policy.require_change_surface_before_patch
+            and plan.task_id != surface.task_id
+        ):
             result = result.model_copy(
                 update={
                     "allowed": False,
@@ -250,3 +264,76 @@ class HarnessV1Coordinator:
                 },
             )
         return plan
+
+    def record_execution(
+        self,
+        *,
+        task: TaskDefinition,
+        artifact: TaskExecutionArtifact,
+    ) -> TaskExecutionArtifact:
+        """
+        把已经通过 Runtime 验证的
+        Execution Artifact 写入统一
+        Task Artifact Store。
+        """
+
+        if artifact.task_id != task.task_id:
+            raise ValueError("Execution Artifact " "task_id 与 Task 不一致")
+
+        self.store.put_model(
+            task_id=task.task_id,
+            artifact_type="execution",
+            model=artifact,
+            depends_on_task_ids=list(task.depends_on),
+        )
+
+        self._trace(
+            task_id=task.task_id,
+            event_type="execution_recorded",
+            data={
+                "proposal_id": (artifact.proposal_id),
+                "changed_files": [
+                    item.relative_path for item in artifact.changed_files
+                ],
+                "verification_checks": [
+                    item.name for item in artifact.verification_checks
+                ],
+            },
+        )
+
+        return artifact
+
+    def attach_upstream_artifacts(
+        self,
+        *,
+        bundle: TaskContextBundle,
+        task_plan: TaskPlan | None = None,
+    ) -> TaskContextBundle:
+        """
+        把上游持久化 Artifact 放进
+        当前 TaskContextBundle。
+
+        这样 Investigation / Coding /
+        Renderer 都可以看到真实历史状态。
+        """
+
+        investigations = self.artifact_resolver.upstream_investigations(
+            task=bundle.task,
+            task_plan=task_plan,
+        )
+
+        executions = self.artifact_resolver.upstream_executions(
+            task=bundle.task,
+            task_plan=task_plan,
+        )
+
+        upstream = [item.model_dump(mode="json") for item in investigations]
+
+        upstream.extend(item.model_dump(mode="json") for item in executions)
+
+        return bundle.model_copy(
+            deep=True,
+            update={
+                "upstream_artifacts": upstream,
+            },
+        )

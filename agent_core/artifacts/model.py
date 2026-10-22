@@ -4,10 +4,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 ArtifactType = Literal[
     "investigation",
     "change_surface",
+    "execution",
     "replan",
 ]
 
@@ -19,9 +19,7 @@ class TaskArtifact(BaseModel):
     task_id: str = Field(min_length=1)
     artifact_type: ArtifactType
     depends_on_task_ids: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: dict[str, Any]
 
 

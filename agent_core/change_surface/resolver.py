@@ -12,6 +12,9 @@ from agent_core.codebase.model import HybridRelevantFileSelection
 from agent_core.context.model import TaskContextBundle
 from agent_core.llm.base import LLM
 from agent_core.llm.model import ChatRequest, Message
+from agent_core.artifacts.execution_model import (
+    TaskExecutionArtifact,
+)
 
 
 class ChangeSurfaceResolver:
@@ -49,7 +52,9 @@ class ChangeSurfaceResolver:
         bundle: TaskContextBundle,
         selection: HybridRelevantFileSelection,
         upstream_investigations: list[InvestigationArtifact],
+        upstream_executions: list[TaskExecutionArtifact] | None = None,
     ) -> ResolvedChangeSurface:
+        execution_artifacts = list(upstream_executions or [])
         if bundle.task.task_type not in {"code_change", "test"}:
             raise ChangeSurfaceResolutionError(
                 "ChangeSurfaceResolver 只处理 code_change / test Task"
@@ -88,6 +93,9 @@ class ChangeSurfaceResolver:
             ],
             "upstream_investigations": [
                 item.model_dump(mode="json") for item in upstream_investigations
+            ],
+            "upstream_executions": [
+                item.model_dump(mode="json") for item in execution_artifacts
             ],
             "available_paths": sorted(available_paths),
             "runtime_candidate_targets": sorted(candidate_targets),
@@ -232,7 +240,26 @@ class ChangeSurfaceResolver:
 19. 不得读取 Benchmark Oracle。
 20. 只能输出 JSON 对象。不要 Markdown、不要 ```json code fence、不要解释文字。
 21. 只能使用 Schema 中存在的字段；不要添加额外字段。
+22. upstream_executions 是已经由 Runtime 确认 completed、
+    applied 且 verification passed 的事实，
+    它比 Planner 对“上游将会做什么”的假设更可靠。
 
+23. upstream_executions.changed_files 只能证明：
+    “某个上游 Task 已经真实修改并验证了这个文件”；
+    不代表当前 Task 也必须再次修改该文件。
+
+24. 如果 upstream_executions 已证明某个依赖 Task 已执行，
+    不要再把“该 Task 是否已经执行”写入 unresolved。
+
+25. Execution Artifact 只能确认修改事实和验证状态。
+    对修改后的具体函数名、DOM、接口或行为，
+    仍应优先依据当前 code_context 中的真实代码，
+    不得凭 changed_files 猜测实现细节。
+
+26. 如果 InvestigationArtifact 与 Execution Artifact
+    对上游状态存在时间上的冲突，
+    Execution Artifact 表示更晚的已完成状态，
+    应优先用于判断上游 Task 是否已经执行。
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """.strip()

@@ -126,7 +126,18 @@ class InvestigationArtifactBuilder:
 16. 不得声称已修改代码或已运行测试。
 17. 不得读取或使用 Benchmark Oracle / expected_files。
 18. 只返回 JSON，不返回 Markdown。
+19. upstream_artifacts 中 artifact_type=execution 的 Artifact，
+    表示对应上游 Task 已经实际 Apply 且 Verification Passed，
+    可以用于确认上游任务是否已经真实完成。
 
+20. Execution Artifact 中的 changed_files
+    只证明文件在上游 Task 中已经被修改并验证，
+    不代表当前 Investigation 应将该文件标记为 candidate_target。
+
+21. 对上游修改后的具体代码事实，
+    仍以当前提供的 code_context 为准；
+    如果代码内容没有提供，不要仅根据文件名猜测具体实现。
+    
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """.strip()
@@ -158,6 +169,7 @@ JSON Schema：
             },
             "repository": bundle.repository.model_dump(mode="json"),
             "engineering_rules": list(bundle.engineering_rules),
+            "upstream_artifacts": list(bundle.upstream_artifacts),
             "code_context": [
                 {
                     "relative_path": item.relative_path,

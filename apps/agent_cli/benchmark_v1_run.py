@@ -241,7 +241,12 @@ async def main():
             max_total_chars=40_000,
             max_chars_per_file=10_000,
         )
-
+        bundle = (
+            coordinator.attach_upstream_artifacts(
+                bundle=bundle,
+                task_plan=record.task_plan,
+            )
+        )
         print_graph_context_diagnostics(
             task_id=task.task_id,
             retrieval_selection=retrieval_selection,

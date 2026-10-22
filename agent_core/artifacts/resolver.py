@@ -4,6 +4,9 @@ from agent_core.change_surface.model import (
     ResolvedChangeSurface,
 )
 from agent_core.sdd.model import TaskDefinition, TaskPlan
+from agent_core.artifacts.execution_model import (
+    TaskExecutionArtifact,
+)
 
 
 class TaskArtifactResolver:
@@ -94,9 +97,74 @@ class TaskArtifactResolver:
             )
             if envelope is None:
                 continue
-            artifacts.append(
-                InvestigationArtifact.model_validate(envelope.payload)
+            artifacts.append(InvestigationArtifact.model_validate(envelope.payload))
+        return artifacts
+
+    def upstream_execution_task_ids(
+        self,
+        *,
+        task: TaskDefinition,
+        task_plan: TaskPlan | None = None,
+    ) -> list[str]:
+        """
+        找出当前 Task 的祖先 Task 中，
+        已经真实产生 Execution Artifact 的 Task。
+
+        有 TaskPlan 时：
+            遍历完整 depends_on DAG。
+
+        没有 TaskPlan 时：
+            只检查直接 depends_on。
+        """
+
+        if task_plan is None:
+            candidate_ids = list(task.depends_on)
+        else:
+            candidate_ids = self._ancestor_task_ids(
+                task=task,
+                task_plan=task_plan,
             )
+
+        result: list[str] = []
+
+        for task_id in candidate_ids:
+            envelope = self.store.latest(
+                task_id=task_id,
+                artifact_type="execution",
+            )
+
+            if envelope is not None:
+                result.append(task_id)
+
+        return result
+
+    def upstream_executions(
+        self,
+        *,
+        task: TaskDefinition,
+        task_plan: TaskPlan | None = None,
+    ) -> list[TaskExecutionArtifact]:
+        """
+        读取当前 Task 所有已完成的
+        upstream Execution Artifact。
+        """
+
+        artifacts: list[TaskExecutionArtifact] = []
+
+        for upstream_task_id in self.upstream_execution_task_ids(
+            task=task,
+            task_plan=task_plan,
+        ):
+            envelope = self.store.latest(
+                task_id=upstream_task_id,
+                artifact_type="execution",
+            )
+
+            if envelope is None:
+                continue
+
+            artifacts.append(TaskExecutionArtifact.model_validate(envelope.payload))
+
         return artifacts
 
     def latest_change_surface(

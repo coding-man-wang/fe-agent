@@ -15,7 +15,12 @@ from agent_core.codebase.model import (
 )
 from agent_core.context.builder import ProjectContextBuilder
 from agent_core.context.model import TaskContextBundle
-from agent_core.sdd.model import RequirementSpec, TaskDefinition, TaskPlan, TechnicalSpec
+from agent_core.sdd.model import (
+    RequirementSpec,
+    TaskDefinition,
+    TaskPlan,
+    TechnicalSpec,
+)
 
 
 class ResolvedTaskContextBuilder:
@@ -71,13 +76,19 @@ class ResolvedTaskContextBuilder:
             max_total_chars=max_total_chars,
             max_chars_per_file=max_chars_per_file,
         )
-        upstream = [
-            item.model_dump(mode="json")
-            for item in self.artifact_resolver.upstream_investigations(
-                task=task,
-                task_plan=task_plan,
-            )
-        ]
+        investigations = self.artifact_resolver.upstream_investigations(
+            task=task,
+            task_plan=task_plan,
+        )
+
+        executions = self.artifact_resolver.upstream_executions(
+            task=task,
+            task_plan=task_plan,
+        )
+
+        upstream = [item.model_dump(mode="json") for item in investigations]
+
+        upstream.extend(item.model_dump(mode="json") for item in executions)
         return base.model_copy(
             deep=True,
             update={
@@ -101,9 +112,9 @@ class ResolvedTaskContextBuilder:
             *surface.references,
             *surface.tests,
         ]
-        next_rank = max(
-            [item.retrieval_rank for item in selection.selected_files] or [0]
-        ) + 1
+        next_rank = (
+            max([item.retrieval_rank for item in selection.selected_files] or [0]) + 1
+        )
         expanded = list(selection.selected_files)
         for path in all_paths:
             if path in existing:
