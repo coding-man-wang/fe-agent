@@ -9,6 +9,10 @@ from agent_core.change_surface.aggregate import ChangeSurfaceAggregator
 from agent_core.change_surface.investigation import InvestigationArtifactBuilder
 from agent_core.change_surface.model import ResolvedChangeSurface
 from agent_core.change_surface.resolver import ChangeSurfaceResolver
+from agent_core.codebase.graph import (
+    RepositoryDependencyGraphBuilder,
+    RepositoryGraphContextExpander,
+)
 from agent_core.codebase.model import RepositoryProfile
 from agent_core.context.builder import ProjectContextBuilder
 from agent_core.harness.coordinator import HarnessV1Coordinator
@@ -17,6 +21,89 @@ from agent_core.sdd.task_graph import topological_sort_tasks
 from apps.agent_cli.benchmark_factory import create_benchmark_runner
 
 load_dotenv()
+
+
+def print_graph_context_diagnostics(
+    *,
+    task_id: str,
+    retrieval_selection,
+    expanded_selection,
+    bundle,
+) -> None:
+    """
+    输出 Graph Context Expansion 的可观测信息。
+
+    目标不是业务逻辑，而是验证：
+
+    Retrieval 看到了什么
+        ↓
+    Graph 新增了什么
+        ↓
+    哪些 Retrieval 文件被 Context Budget 挤出
+        ↓
+    ProjectContextBuilder 最终真正读取了什么
+    """
+
+    retrieval_paths = [
+        item.relative_path for item in retrieval_selection.selected_files
+    ]
+
+    expanded_paths = [item.relative_path for item in expanded_selection.selected_files]
+
+    retrieval_path_set = set(retrieval_paths)
+    expanded_path_set = set(expanded_paths)
+
+    graph_added = [path for path in expanded_paths if path not in retrieval_path_set]
+
+    retrieval_dropped = [
+        path for path in retrieval_paths if path not in expanded_path_set
+    ]
+
+    context_paths = [item.relative_path for item in bundle.code_context]
+
+    print()
+    print("=== Graph Context Expansion: " f"{task_id} ===")
+
+    print("retrieval_before=" f"{len(retrieval_paths)}")
+
+    for item in retrieval_selection.selected_files:
+        print(
+            f"  [retrieval] "
+            f"{item.relative_path} "
+            f"role={item.context_role} "
+            f"target={item.target_match_type} "
+            f"retrieval_rank={item.retrieval_rank} "
+            f"rerank_rank={item.rerank_rank}"
+        )
+
+    print("graph_added=" f"{len(graph_added)}")
+
+    for path in graph_added:
+        item = next(
+            item
+            for item in expanded_selection.selected_files
+            if item.relative_path == path
+        )
+
+        print(f"  [graph] {path} " f"role={item.context_role}")
+
+        for reason in item.reasons:
+            print(f"    reason={reason}")
+
+    print("retrieval_dropped=" f"{len(retrieval_dropped)}")
+
+    for path in retrieval_dropped:
+        print(f"  [budget-drop] {path}")
+
+    print("expanded_selection=" f"{len(expanded_paths)}")
+
+    for path in expanded_paths:
+        print(f"  [selected] {path}")
+
+    print("final_code_context=" f"{len(context_paths)}")
+
+    for path in context_paths:
+        print(f"  [context] {path}")
 
 
 async def main():
@@ -41,11 +128,7 @@ async def main():
         print(record.error or "<no error recorded>")
 
         persisted_path = (
-            fe_agent_root
-            / ".fe-agent"
-            / "benchmark"
-            / "runs"
-            / f"{record.run_id}.json"
+            fe_agent_root / ".fe-agent" / "benchmark" / "runs" / f"{record.run_id}.json"
         )
         print(f"persisted_record={persisted_path}")
 
@@ -68,7 +151,26 @@ async def main():
     capture_service = runner.retrieval_capture_service
     retrieval_service = capture_service.retrieval_service
     index = capture_service.file_indexer.build(benchmark_repository)
+    dependency_graph = RepositoryDependencyGraphBuilder().build(
+        file_index=index,
+    )
 
+    graph_context_expander = RepositoryGraphContextExpander(
+        max_files=8,
+        max_graph_files=3,
+        dependency_depth=2,
+        dependent_depth=1,
+    )
+
+    print()
+    print("=== Repository Graph for Harness ===")
+    print(f"nodes={len(dependency_graph.nodes)}")
+    print(f"edges={len(dependency_graph.edges)}")
+    print("external_imports=" f"{len(dependency_graph.external_imports)}")
+    print(
+        "unresolved_internal_imports="
+        f"{len(dependency_graph.unresolved_internal_imports)}"
+    )
     project = record.project_context
     repository = RepositoryProfile(
         project_name=project.project_name,
@@ -101,8 +203,7 @@ async def main():
     print("=== Harness Task Execution Order ===")
     for task in ordered_tasks:
         print(
-            f"{task.task_id} [{task.task_type}] "
-            f"depends_on={list(task.depends_on)}"
+            f"{task.task_id} [{task.task_type}] " f"depends_on={list(task.depends_on)}"
         )
 
     surfaces: list[ResolvedChangeSurface] = []
@@ -116,11 +217,18 @@ async def main():
             raw_requirement=case.requirement,
             requirement_spec=record.requirement_spec,
         )
-        selection = await retrieval_service.retrieve(
+        retrieval_selection = await retrieval_service.retrieve(
             task=task,
             index=index,
             query_specs=query_specs,
         )
+
+        selection = graph_context_expander.expand(
+            selection=retrieval_selection,
+            index=index,
+            graph=dependency_graph,
+        )
+
         bundle = base_context_builder.build(
             repository_root=benchmark_repository,
             requirement=record.requirement_spec,
@@ -132,6 +240,13 @@ async def main():
             max_files=8,
             max_total_chars=40_000,
             max_chars_per_file=10_000,
+        )
+
+        print_graph_context_diagnostics(
+            task_id=task.task_id,
+            retrieval_selection=retrieval_selection,
+            expanded_selection=selection,
+            bundle=bundle,
         )
 
         if task.task_type == "investigation":

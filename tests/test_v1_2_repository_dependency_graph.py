@@ -134,8 +134,7 @@ def test_builder_and_query_build_real_file_dependency_chain(tmp_path: Path):
     ) in edge_pairs
 
     assert any(
-        item.source_path == "src/stores/users.ts"
-        and item.specifier == "pinia"
+        item.source_path == "src/stores/users.ts" and item.specifier == "pinia"
         for item in graph.external_imports
     )
 
@@ -146,10 +145,7 @@ def test_builder_and_query_build_real_file_dependency_chain(tmp_path: Path):
         max_depth=3,
     )
 
-    dependency_paths = {
-        item.relative_path
-        for item in dependencies
-    }
+    dependency_paths = {item.relative_path for item in dependencies}
 
     assert "src/stores/users.ts" in dependency_paths
     assert "src/api/users.ts" in dependency_paths
@@ -160,10 +156,7 @@ def test_builder_and_query_build_real_file_dependency_chain(tmp_path: Path):
         max_depth=2,
     )
 
-    dependent_paths = {
-        item.relative_path
-        for item in dependents
-    }
+    dependent_paths = {item.relative_path for item in dependents}
 
     assert "src/stores/users.ts" in dependent_paths
     assert "src/views/UsersView.vue" in dependent_paths
@@ -185,7 +178,36 @@ def test_builder_records_unresolved_internal_import(tmp_path: Path):
     )
 
     assert len(graph.unresolved_internal_imports) == 1
-    assert (
-        graph.unresolved_internal_imports[0].specifier
-        == "@/missing/module"
+    assert graph.unresolved_internal_imports[0].specifier == "@/missing/module"
+
+
+def test_builder_resolves_css_side_effect_import_as_internal_target(
+    tmp_path: Path,
+):
+    src = tmp_path / "src"
+    src.mkdir()
+
+    (src / "main.ts").write_text(
+        "import './styles.css'\n",
+        encoding="utf-8",
     )
+
+    (src / "styles.css").write_text(
+        "body { margin: 0; }\n",
+        encoding="utf-8",
+    )
+
+    file_index = RepositoryFileIndexer().build(tmp_path)
+
+    graph = RepositoryDependencyGraphBuilder().build(
+        file_index=file_index,
+    )
+
+    assert any(
+        edge.source_path == "src/main.ts"
+        and edge.target_path == "src/styles.css"
+        and edge.import_kind == "side_effect"
+        for edge in graph.edges
+    )
+
+    assert graph.unresolved_internal_imports == []

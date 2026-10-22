@@ -1,6 +1,9 @@
 from agent_core.codebase.graph.builder import (
     RepositoryDependencyGraphBuilder,
 )
+from agent_core.codebase.graph.context_expander import (
+    RepositoryGraphContextExpander,
+)
 from agent_core.codebase.graph.extractor import (
     TypeScriptVueImportExtractor,
 )
@@ -32,6 +35,7 @@ __all__ = [
     "RepositoryDependencyGraph",
     "RepositoryDependencyGraphBuilder",
     "RepositoryDependencyGraphQuery",
+    "RepositoryGraphContextExpander",
     "TypeScriptVueImportExtractor",
     "UnresolvedInternalImport",
 ]

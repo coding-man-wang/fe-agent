@@ -65,12 +65,8 @@ class ChangeSurfaceResolver:
             bundle=bundle,
             selection=selection,
         )
-        investigation_roles = self._investigation_roles(
-            upstream_investigations
-        )
-        candidate_targets = self._candidate_target_paths(
-            upstream_investigations
-        )
+        investigation_roles = self._investigation_roles(upstream_investigations)
+        candidate_targets = self._candidate_target_paths(upstream_investigations)
 
         payload = {
             "task": bundle.task.model_dump(mode="json"),
@@ -195,20 +191,47 @@ class ChangeSurfaceResolver:
 2. 同一个 relative_path 只能出现在一个角色列表中。
 3. 不要把“相关”“可能需要”“最可能”“如果需要”直接等价成“必须修改”。
 4. code_change Task 的 implementation_targets 必须有上游 InvestigationArtifact 的 candidate_target 事实支持。
-5. 如果某个文件没有 candidate_target 证据，只能放 dependencies/references，或写入 unresolved；不要猜成修改目标。
-6. 如果 Repository Evidence 已证明当前 Task 目标由现有实现满足，允许 implementation_targets 为空。不要为了 task_type=code_change 强行找文件修改。
-7. 如果是否需要修改仍缺少关键代码证据，implementation_targets 可以为空，并把缺失事实放 unresolved。
-8. test Task：测试文件只能放 tests；生产代码只能作为 dependencies/references，不能放 implementation_targets。
-9. code_change Task：测试文件不能放 implementation_targets；如确实需要同步修改测试，放 tests。
-10. Requirement non_goals / constraints 明确禁止修改的区域，不得进入 implementation_targets 或 tests。
-11. API/Mock/Router 等若需求明确“不修改”，但理解实现需要它们，放 dependencies。
-12. 优先使用 InvestigationArtifact 中的实际代码事实，而不是 rerank rank。
-13. unresolved 只记录真正影响执行决策的未知事实，不重复改写同一个问题。
-14. rationale 要说明为什么一个文件是 target/dependency/reference/test，禁止使用“排名高所以修改”。
-15. execution_disposition 可以留 null；Runtime 会根据最终角色和 unresolved 重新计算。
-16. 不得读取 Benchmark Oracle。
-17. 只能输出 JSON 对象。不要 Markdown、不要 ```json code fence、不要解释文字。
-18. 只能使用 Schema 中存在的字段；不要添加额外字段。
+5. candidate_target 只是修改资格（eligibility），不是修改义务（obligation）。
+   即使文件存在 candidate_target 证据，
+   仍然必须判断当前 Task 是否真的需要修改它。
+   Minimal Change 不等于最少文件数量。
+
+    确定 implementation_targets 时必须维持现有 Responsibility Boundary：
+    
+    1. 如果 candidate_target 是 Requirement 所改变状态、
+       行为或不变量的 owner，
+       不要仅因为调用方可以绕过 owner 直接完成行为，
+       就将 owner 从 implementation_targets 移除。
+    
+    2. 不得为了减少修改文件数量，
+       将状态转换、不变量维护或 domain behavior
+       泄漏到原本只负责 orchestration / presentation 的调用方。
+    
+    3. 最小必要修改集合应同时满足：
+       - Requirement 行为完整；
+       - 现有模块职责保持一致；
+       - 状态不变量由其 owner 维护；
+       - 不引入重复或平行实现。
+6. implementation_targets 应是满足当前 Task 的最小必要修改集合。
+   如果修改另一个已确认 target 即可完成当前 Task，
+   不要因为某文件“也可以修改”就把它加入 implementation_targets。
+7. 对 UI 组合关系：
+   如果父级页面能够通过组合现有子组件并新增同级 UI 完成需求，
+   不应仅因子组件位于相关区域就修改子组件。
+8. 如果某个文件没有 candidate_target 证据，只能放 dependencies/references，或写入 unresolved；不要猜成修改目标。
+9. 如果 Repository Evidence 已证明当前 Task 目标由现有实现满足，允许 implementation_targets 为空。不要为了 task_type=code_change 强行找文件修改。
+10. 如果是否需要修改仍缺少关键代码证据，implementation_targets 可以为空，并把缺失事实放 unresolved。
+11. test Task：测试文件只能放 tests；生产代码只能作为 dependencies/references，不能放 implementation_targets。
+12. code_change Task：测试文件不能放 implementation_targets；如确实需要同步修改测试，放 tests。
+13. Requirement non_goals / constraints 明确禁止修改的区域，不得进入 implementation_targets 或 tests。
+14. API/Mock/Router 等若需求明确“不修改”，但理解实现需要它们，放 dependencies。
+15. 优先使用 InvestigationArtifact 中的实际代码事实，而不是 rerank rank。
+16. unresolved 只记录真正影响执行决策的未知事实，不重复改写同一个问题。
+17. rationale 要说明为什么一个文件是 target/dependency/reference/test，禁止使用“排名高所以修改”。
+18. execution_disposition 可以留 null；Runtime 会根据最终角色和 unresolved 重新计算。
+19. 不得读取 Benchmark Oracle。
+20. 只能输出 JSON 对象。不要 Markdown、不要 ```json code fence、不要解释文字。
+21. 只能使用 Schema 中存在的字段；不要添加额外字段。
 
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
@@ -571,9 +594,7 @@ JSON Schema：
                 location = ".".join(str(part) for part in item.get("loc", ()))
                 message = item.get("msg", "validation error")
                 error_type = item.get("type", "unknown")
-                details.append(
-                    f"{location or '<root>'}: {message} [{error_type}]"
-                )
+                details.append(f"{location or '<root>'}: {message} [{error_type}]")
             return "; ".join(details)
 
         return str(error)

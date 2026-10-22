@@ -73,17 +73,59 @@ class InvestigationArtifactBuilder:
 规则：
 1. observed_files.relative_path 只能来自输入 code_context。
 2. evidence 必须是代码事实，不能写“排名高”“很相关”等检索结论。
-3. candidate_target 只是候选修改位置，不是最终修改决定。
-4. dependency 表示需要理解但原则上不主动修改。
-5. reference 表示类似实现或邻接实现。
-6. test 表示测试文件。
-7. unknown 表示证据不足。
-8. Requirement/TechnicalSpec 明确声明“不修改”的模块，如仍需理解，应优先标 dependency。
-9. findings 只能记录已从代码确认的事实。
-10. 未提供文件才能回答的问题进入 unresolved_questions，不要猜。
-11. 不得声称已修改代码或已运行测试。
-12. 不得读取或使用 Benchmark Oracle / expected_files。
-13. 只返回 JSON，不返回 Markdown。
+3. candidate_target 表示：
+   基于当前提供的代码事实，为满足 Requirement，
+   该文件中的现有职责/状态/行为本身存在必须修改的证据。
+4. “可以在这里实现”“与功能相邻”“修改这里也能完成需求”
+   不足以标记 candidate_target。
+5. 如果 Requirement 可以通过修改父级组合层完成，
+   而无需改变子组件自身契约，
+   子组件应标记为 dependency，而不是 candidate_target。
+6. 如果存在多个可行实现位置，但代码事实不足以证明某一个必须修改，
+   不要把所有位置都标记为 candidate_target。
+   保守标记 dependency，并把设计选择写入 unresolved_questions。
+7. candidate_target 应遵循 Minimal Change Principle：
+   在满足需求的前提下，优先识别最小必要生产修改面。
+   candidate_target 不仅包括“代码无法完成需求而必须直接修改”的文件，
+    也包括其现有职责所拥有的状态、行为或不变量因 Requirement
+    发生变化而需要扩展的文件。
+    
+    判断 candidate_target 时必须考虑 Responsibility Ownership：
+    
+    1. 如果一个文件拥有 Requirement 正在改变的核心状态或业务不变量，
+       即使调用方可以通过直接操作内部/公开状态绕过修改该文件，
+       该 owner 仍应优先视为 candidate_target。
+    
+    2. 不要为了减少修改文件数量，
+       把本应由状态 owner / domain owner 维护的行为泄漏到调用方。
+    
+    3. 如果已有模块已经通过 action / method 封装同类状态转换，
+       新增同类状态转换应优先延续这一职责边界。
+    
+    4. “父组件可以直接修改子模块状态”不能单独作为
+       排除该状态 owner candidate_target 的理由。
+    
+    5. Minimal Change Principle 的含义是：
+       在维持现有架构职责、封装边界和状态不变量的前提下，
+       选择最小必要修改集合；
+       不是单纯追求修改文件数量最少。
+    
+    6. 对相邻 UI 组件仍保持保守：
+       只有其自身 contract / behavior 必须变化时才是 candidate_target。
+       仅仅因为 UI 位于该组件附近，不足以成为 candidate_target。
+8. target_match_type、relevance_reasons、rerank rank、
+   directory match、Graph relation 都只能帮助定位代码，
+   不能作为 candidate_target 的直接证据。
+9. dependency 表示需要理解但原则上不主动修改。
+10. reference 表示类似实现或邻接实现。
+11. test 表示测试文件。
+12. unknown 表示证据不足。
+13. Requirement/TechnicalSpec 明确声明“不修改”的模块，如仍需理解，应优先标 dependency。
+14. findings 只能记录已从代码确认的事实。
+15. 未提供文件才能回答的问题进入 unresolved_questions，不要猜。
+16. 不得声称已修改代码或已运行测试。
+17. 不得读取或使用 Benchmark Oracle / expected_files。
+18. 只返回 JSON，不返回 Markdown。
 
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}

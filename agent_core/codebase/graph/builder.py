@@ -26,6 +26,7 @@ class RepositoryDependencyGraphBuilder:
         ".cjs",
         ".vue",
         ".json",
+        ".css",
     }
 
     GRAPH_SOURCE_SUFFIXES = {
@@ -129,10 +130,7 @@ class RepositoryDependencyGraphBuilder:
                         specifier=reference.specifier,
                         import_kind=reference.import_kind,
                         line_number=reference.line_number,
-                        reason=(
-                            resolution.reason
-                            or "unresolved_internal_import"
-                        ),
+                        reason=(resolution.reason or "unresolved_internal_import"),
                     )
                 )
 
