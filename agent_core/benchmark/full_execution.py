@@ -58,6 +58,12 @@ from agent_core.harness.trace import (
 from agent_core.codebase.task_context_selection import (
     TaskContextSelectionService,
 )
+from agent_core.codebase.impact import (
+    RepositoryChangeImpactAnalyzer,
+)
+from agent_core.benchmark.impact_verification import (
+    ImpactAwareVerificationPlanner,
+)
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -179,6 +185,9 @@ class FullExecutionBenchmarkService:
         verification_store = VerificationStore(self.runtime_state_root)
         completion_store = TaskCompletionStore(self.runtime_state_root)
         verification_policy = build_frontend_verification_policy()
+
+        impact_verification_planner = ImpactAwareVerificationPlanner()
+
         reviewer = PatchReviewer()
         workspace_manager = RunScopedGitWorkspaceManager(
             run_id=self.run_id,
@@ -196,6 +205,8 @@ class FullExecutionBenchmarkService:
         )
         execution_surface_policy = ProductionExecutionSurfacePolicy()
         runtime_execution_policy = RuntimeExecutionDecisionPolicy()
+
+        impact_analyzer = RepositoryChangeImpactAnalyzer(max_depth=2)
 
         current_root = self.benchmark_repository
         current_sha = case.base_commit_sha
@@ -324,6 +335,12 @@ class FullExecutionBenchmarkService:
                         deep=True,
                         update={
                             "context_revision": (current_sha),
+                            "context_retrieval_mode": (
+                                context_selection.retrieval_mode
+                            ),
+                            "semantic_fallback_reason": (
+                                context_selection.semantic_error
+                            ),
                             "retrieval_files": (retrieval_paths),
                             "selected_context_files": (selected_paths),
                             "graph_added_files": (graph_added_paths),
@@ -458,7 +475,41 @@ class FullExecutionBenchmarkService:
                         raise FullExecutionBenchmarkError(
                             "; ".join(proposal_decision.reasons)
                         )
+                    planned_changed_files = sorted(
+                        patch.relative_path for patch in proposal.patches
+                    )
 
+                    planned_impact = impact_analyzer.analyze(
+                        changed_files=(planned_changed_files),
+                        graph=(context_selection.graph),
+                        index=current_index,
+                        repository_revision=(current_sha),
+                        # 使用原始 surface，
+                        # 而不是 execution_surface。
+                        #
+                        # 因为 ProductionExecutionSurfacePolicy
+                        # 会把 tests 转成只读 references。
+                        #
+                        # 但做影响分析时，
+                        # 我们仍然需要知道哪些测试是
+                        # Change Surface 已经识别出来的。
+                        known_test_files=list(surface.tests),
+                    )
+
+                    planned_verification = impact_verification_planner.build(
+                        base_command_ids=list(
+                            case.expectation.verification_command_ids
+                        ),
+                        impact=planned_impact,
+                    )
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "planned_impact": (planned_impact),
+                            "planned_verification": (planned_verification),
+                        },
+                    )
                     review = reviewer.prepare(proposal)
                     task_record = task_record.model_copy(
                         deep=True,
@@ -497,7 +548,7 @@ class FullExecutionBenchmarkService:
                     verification_plan = VerificationPlan(
                         proposal_id=review.proposal_id,
                         task_id=task.task_id,
-                        command_ids=list(case.expectation.verification_command_ids),
+                        command_ids=list(planned_verification.final_command_ids),
                     )
                     execution = await WorkspaceExecutionService(
                         runtime_root=self.runtime_state_root,
