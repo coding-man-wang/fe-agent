@@ -40,8 +40,13 @@ class TaskExecutionArtifactBuilder:
         journal: PatchExecutionJournal,
         completion: TaskCompletionRecord,
         verification: VerificationRunRecord,
+        base_revision: str | None = None,
+        result_revision: str | None = None,
     ) -> TaskExecutionArtifact:
-
+        if (base_revision is None) != (result_revision is None):
+            raise ExecutionArtifactBuildError(
+                "base_revision 与 result_revision " "必须同时提供或同时省略"
+            )
         # =================================
         # 1. Identity
         #
@@ -147,6 +152,8 @@ class TaskExecutionArtifactBuilder:
         return TaskExecutionArtifact(
             task_id=journal.task_id,
             proposal_id=journal.proposal_id,
+            base_revision=base_revision,
+            result_revision=result_revision,
             changed_files=[
                 ExecutedFileChange(
                     relative_path=(item.relative_path),

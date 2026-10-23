@@ -275,10 +275,41 @@ class HarnessV1Coordinator:
         把已经通过 Runtime 验证的
         Execution Artifact 写入统一
         Task Artifact Store。
+
+        同一个 Task + Proposal 重复发布时：
+            返回已有 Artifact。
+
+        同一个 Task 出现两个不同 Proposal：
+            直接失败，避免状态歧义。
         """
 
         if artifact.task_id != task.task_id:
             raise ValueError("Execution Artifact " "task_id 与 Task 不一致")
+
+        existing_envelope = self.store.latest(
+            task_id=task.task_id,
+            artifact_type="execution",
+        )
+
+        if existing_envelope is not None:
+            existing = TaskExecutionArtifact.model_validate(existing_envelope.payload)
+
+            if existing.proposal_id != artifact.proposal_id:
+                raise RuntimeError(
+                    "同一个 Task 已存在不同 "
+                    "Proposal 的 Execution Artifact; "
+                    f"task={task.task_id}, "
+                    f"existing={existing.proposal_id}, "
+                    f"incoming={artifact.proposal_id}"
+                )
+
+            if existing != artifact:
+                raise RuntimeError(
+                    "同一个 Proposal 对应的 " "Execution Artifact 内容不一致"
+                )
+
+            # Idempotent retry。
+            return existing
 
         self.store.put_model(
             task_id=task.task_id,
@@ -292,6 +323,8 @@ class HarnessV1Coordinator:
             event_type="execution_recorded",
             data={
                 "proposal_id": (artifact.proposal_id),
+                "base_revision": (artifact.base_revision),
+                "result_revision": (artifact.result_revision),
                 "changed_files": [
                     item.relative_path for item in artifact.changed_files
                 ],

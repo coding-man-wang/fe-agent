@@ -10,7 +10,6 @@ from agent_core.coding.verification_model import (
     VerificationCheck,
 )
 
-
 TaskExecutionStatus = Literal[
     "skipped_no_change",
     "skipped_no_production_change",
@@ -25,17 +24,37 @@ class FullExecutionTaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
+
     task_type: str
+
     status: TaskExecutionStatus
+
     execution_disposition: str | None = None
+
     base_commit_sha: str | None = None
+
+    context_revision: str | None = None
+
+    retrieval_files: list[str] = Field(default_factory=list)
+
+    selected_context_files: list[str] = Field(default_factory=list)
+
+    graph_added_files: list[str] = Field(default_factory=list)
+
     workspace_id: str | None = None
+
     proposal_id: str | None = None
+
     proposed_files: list[str] = Field(default_factory=list)
+
     verification_status: str | None = None
+
     verification_checks: list[VerificationCheck] = Field(default_factory=list)
+
     completion_status: str | None = None
+
     commit_sha: str | None = None
+
     error: str | None = None
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from agent_core.artifacts.model import ArtifactType, TaskArtifact
+from collections.abc import Collection
 
 
 class JsonTaskArtifactStore:
@@ -16,7 +17,10 @@ class JsonTaskArtifactStore:
     def put(self, artifact: TaskArtifact) -> Path:
         task_dir = self.root / artifact.task_id
         task_dir.mkdir(parents=True, exist_ok=True)
-        path = task_dir / f"{artifact.created_at.timestamp():.6f}-{artifact.artifact_id}.json"
+        path = (
+            task_dir
+            / f"{artifact.created_at.timestamp():.6f}-{artifact.artifact_id}.json"
+        )
         self._atomic_write(path, artifact.model_dump_json(indent=2))
         return path
 
@@ -48,7 +52,9 @@ class JsonTaskArtifactStore:
         artifacts: list[TaskArtifact] = []
         for path in files:
             try:
-                artifacts.append(TaskArtifact.model_validate_json(path.read_text("utf-8")))
+                artifacts.append(
+                    TaskArtifact.model_validate_json(path.read_text("utf-8"))
+                )
             except (OSError, ValueError):
                 continue
         artifacts.sort(key=lambda item: item.created_at)
@@ -66,6 +72,51 @@ class JsonTaskArtifactStore:
             if item.artifact_type == artifact_type
         ]
         return matches[-1] if matches else None
+
+    def seed_from(
+        self,
+        *,
+        source: "JsonTaskArtifactStore",
+        artifact_types: Collection[ArtifactType],
+    ) -> int:
+        """
+        把另一个 Artifact Store 中指定类型的
+        Artifact 复制到当前 Store。
+
+        主要用于：
+
+            baseline artifacts
+                  ↓
+            run-scoped artifacts
+
+        注意：
+
+        - target 必须为空；
+        - source 和 target 不能是同一个目录；
+        - Execution Artifact 不应默认跨 Run 复制。
+        """
+
+        if self.root == source.root:
+            raise ValueError("不能从自身 seed Artifact Store")
+
+        if self.list():
+            raise ValueError("目标 Artifact Store 必须为空")
+
+        allowed_types = set(artifact_types)
+
+        copied = 0
+
+        for artifact in source.list():
+            if artifact.artifact_type not in allowed_types:
+                continue
+
+            # 保留原 artifact_id / created_at，
+            # 因为这是已有历史证据的快照，
+            # 不是重新生成 Artifact。
+            self.put(artifact)
+            copied += 1
+
+        return copied
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:

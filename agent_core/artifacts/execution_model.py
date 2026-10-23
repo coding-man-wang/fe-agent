@@ -91,6 +91,17 @@ class TaskExecutionArtifact(BaseModel):
         max_length=64,
     )
 
+    base_revision: str | None = Field(
+        default=None,
+        min_length=1,
+    )
+
+    # 当前 Task 执行并 Commit 后的 Revision。
+    result_revision: str | None = Field(
+        default=None,
+        min_length=1,
+    )
+
     status: Literal["completed"] = "completed"
 
     execution_status: Literal["applied"] = "applied"

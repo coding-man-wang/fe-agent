@@ -12,6 +12,7 @@ HarnessEventType = Literal[
     "context_refined",
     "scope_checked",
     "repository_replanned",
+    "execution_recorded",
 ]
 
 

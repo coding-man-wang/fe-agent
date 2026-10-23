@@ -29,10 +29,17 @@ from agent_core.sdd.model import (
     TaskDefinition,
     TaskPlan,
 )
+from unittest.mock import Mock
+
+from agent_core.harness.coordinator import (
+    HarnessV1Coordinator,
+)
 
 PROPOSAL_ID = "a" * 64
 BEFORE_HASH = "b" * 64
 AFTER_HASH = "c" * 64
+BASE_REVISION = "1" * 40
+RESULT_REVISION = "2" * 40
 
 
 def _execution_artifact() -> TaskExecutionArtifact:
@@ -80,6 +87,8 @@ def _execution_artifact() -> TaskExecutionArtifact:
         journal=journal,
         completion=completion,
         verification=verification,
+        base_revision=BASE_REVISION,
+        result_revision=RESULT_REVISION,
     )
 
 
@@ -126,6 +135,10 @@ def test_build_execution_artifact():
     assert changed.before_sha256 == BEFORE_HASH
 
     assert changed.after_sha256 == AFTER_HASH
+
+    assert artifact.base_revision == BASE_REVISION
+
+    assert artifact.result_revision == RESULT_REVISION
 
 
 def test_execution_artifact_requires_applied_journal():
@@ -231,3 +244,93 @@ def test_resolver_reads_transitive_upstream_execution(
     assert executions[0].task_id == "TASK-002"
 
     assert executions[0].changed_files[0].relative_path == "src/stores/users.ts"
+
+
+def test_execution_artifact_requires_revision_pair():
+    journal = PatchExecutionJournal(
+        proposal_id=PROPOSAL_ID,
+        task_id="TASK-002",
+        status="applied",
+        files=[
+            FileExecutionRecord(
+                relative_path=("src/stores/users.ts"),
+                expected_sha256=(BEFORE_HASH),
+                after_sha256=AFTER_HASH,
+                status="applied",
+            )
+        ],
+    )
+
+    completion = TaskCompletionRecord(
+        task_id="TASK-002",
+        proposal_id=PROPOSAL_ID,
+    )
+
+    verification = VerificationRunRecord(
+        proposal_id=PROPOSAL_ID,
+        task_id="TASK-002",
+        status="succeeded",
+        result=PatchVerificationResult(
+            proposal_id=PROPOSAL_ID,
+            task_id="TASK-002",
+            status="passed",
+            checks=[],
+        ),
+    )
+
+    try:
+        TaskExecutionArtifactBuilder.build(
+            journal=journal,
+            completion=completion,
+            verification=verification,
+            base_revision=BASE_REVISION,
+            result_revision=None,
+        )
+
+    except ExecutionArtifactBuildError:
+        pass
+
+    else:
+        raise AssertionError(
+            "只提供一个 Repository Revision " "不应生成 Execution Artifact"
+        )
+
+
+def test_record_execution_is_idempotent(
+    tmp_path,
+):
+    store = JsonTaskArtifactStore(root=tmp_path / "artifacts")
+
+    coordinator = HarnessV1Coordinator(
+        store=store,
+        investigation_builder=Mock(),
+        surface_resolver=Mock(),
+    )
+
+    task = _task(
+        task_id="TASK-002",
+        task_type="code_change",
+        depends_on=["TASK-001"],
+    )
+
+    artifact = _execution_artifact()
+
+    first = coordinator.record_execution(
+        task=task,
+        artifact=artifact,
+    )
+
+    second = coordinator.record_execution(
+        task=task,
+        artifact=artifact,
+    )
+
+    assert first == second
+
+    executions = [
+        item
+        for item in store.list(task_id="TASK-002")
+        if (item.artifact_type == "execution")
+    ]
+
+    assert len(executions) == 1

@@ -34,22 +34,46 @@ EvidenceGapSeverity = Literal[
     "advisory",
 ]
 
+EvidenceGapResolutionStage = Literal[
+    "analysis",
+    "verification",
+]
+
 
 class EvidenceGap(BaseModel):
     """
     Coding Analysis 阶段发现的证据缺口。
 
-    blocking:
-        当前缺失信息会阻止 Agent 判断
-        是否需要修改 / 如何安全修改。
+    severity:
+        blocking:
+            缺失信息阻止当前阶段做出可靠判断。
 
-    advisory:
-        信息有帮助，但不影响当前修改决策。
-        例如：
-        - 测试尚未执行
-        - 参考组件未展开
-        - 测试覆盖情况未知
-        - 缺少运行时日志
+        advisory:
+            信息有帮助，但不阻止当前阶段继续。
+
+    resolution_stage:
+        analysis:
+            必须通过更多代码、接口、业务规则等
+            分析证据解决。
+
+        verification:
+            需要通过测试、运行时日志、请求记录、
+            build 等后续执行结果解决。
+
+    示例：
+
+    analysis:
+        - implementation target 内容未提供；
+        - API contract 不清楚；
+        - 业务约束缺失；
+        - 无法判断应该如何安全修改。
+
+    verification:
+        - 尚未运行 unit test；
+        - 尚未 build；
+        - 缺少 runtime log；
+        - 缺少网络请求记录；
+        - 尚未证明不会重复请求。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -57,6 +81,8 @@ class EvidenceGap(BaseModel):
     description: str = Field(min_length=1)
 
     severity: EvidenceGapSeverity
+
+    resolution_stage: EvidenceGapResolutionStage = "analysis"
 
     related_paths: list[str] = Field(
         default_factory=list,

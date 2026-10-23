@@ -22,8 +22,10 @@ from agent_core.benchmark.text_model import LLMTextModelAdapter
 from agent_core.benchmark.verification_policy import build_frontend_verification_policy
 from agent_core.benchmark.workspace_dependencies import NodeModulesWorkspaceProvisioner
 from agent_core.change_surface.model import ResolvedChangeSurface
-from agent_core.codebase.file_index import RepositoryFileIndexer
-from agent_core.codebase.model import HybridRelevantFileSelection, RepositoryProfile
+from agent_core.codebase.model import RepositoryProfile
+from agent_core.codebase.task_context_selection import (
+    TaskContextSelectionService,
+)
 from agent_core.coding.agent import ReadOnlyCodingAgent
 from agent_core.coding.approval_store import ApprovalStore
 from agent_core.coding.completion_store import TaskCompletionStore
@@ -44,6 +46,18 @@ from agent_core.harness.coordinator import HarnessV1Coordinator
 from agent_core.llm.base import LLM
 from agent_core.sdd.model import RequirementSpec, TaskPlan, TechnicalSpec
 from agent_core.sdd.task_graph import topological_sort_tasks
+from agent_core.artifacts.store import (
+    JsonTaskArtifactStore,
+)
+from agent_core.coding.execution_artifact import (
+    TaskExecutionArtifactBuilder,
+)
+from agent_core.harness.trace import (
+    JsonlHarnessTraceStore,
+)
+from agent_core.codebase.task_context_selection import (
+    TaskContextSelectionService,
+)
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -61,6 +75,7 @@ class FullExecutionBenchmarkService:
         baseline_run_id: str,
         llm: LLM,
         coordinator: HarnessV1Coordinator,
+        context_selection_service: TaskContextSelectionService,
     ) -> None:
         self.fe_agent_root = Path(fe_agent_root).resolve(strict=True)
         self.benchmark_repository = Path(benchmark_repository).resolve(strict=True)
@@ -81,6 +96,59 @@ class FullExecutionBenchmarkService:
         self.runtime_state_root = self.run_root / "state"
         self.runtime_state_root.mkdir(parents=True, exist_ok=True)
         self.store = FullExecutionRunStore(self.fe_agent_root)
+        self.context_selection_service = context_selection_service
+
+    def _create_run_scoped_coordinator(
+        self,
+    ) -> HarnessV1Coordinator:
+        """
+        为当前 Full Execution Run 创建
+        独立 Harness Artifact Store。
+
+        baseline coordinator 只作为历史证据来源。
+
+        本次执行产生的 execution artifact
+        只能写入：
+
+            full_execution/<run_id>/harness
+
+        防止污染 historical baseline。
+        """
+
+        harness_root = self.run_root / "harness"
+
+        harness_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        run_store = JsonTaskArtifactStore(root=(harness_root / "artifacts"))
+
+        # 只复制静态/历史分析证据。
+        #
+        # 特别注意：
+        # execution 不允许从 baseline 复制。
+        #
+        # 否则可能把另一次 Full Execution
+        # 的执行事实带进当前 Run。
+        run_store.seed_from(
+            source=self.coordinator.store,
+            artifact_types={
+                "investigation",
+                "change_surface",
+                "replan",
+            },
+        )
+
+        return HarnessV1Coordinator(
+            store=run_store,
+            investigation_builder=(self.coordinator.investigation_builder),
+            surface_resolver=(self.coordinator.surface_resolver),
+            context_policy=(self.coordinator.context_policy),
+            scope_guard=(self.coordinator.scope_guard),
+            policy=(self.coordinator.policy),
+            trace_store=(JsonlHarnessTraceStore(path=(harness_root / "trace.jsonl"))),
+        )
 
     async def run(
         self,
@@ -92,7 +160,6 @@ class FullExecutionBenchmarkService:
         repository: RepositoryProfile,
         engineering_rules: list[str],
         task_surfaces: dict[str, ResolvedChangeSurface],
-        task_selections: dict[str, HybridRelevantFileSelection],
     ) -> FullExecutionRunRecord:
         record = FullExecutionRunRecord(
             run_id=self.run_id,
@@ -101,6 +168,8 @@ class FullExecutionBenchmarkService:
             base_commit_sha=case.base_commit_sha,
         )
         self.store.save(record)
+
+        run_coordinator = self._create_run_scoped_coordinator()
 
         text_model = LLMTextModelAdapter(llm=self.llm)
         coding_agent = ReadOnlyCodingAgent(model=text_model)
@@ -121,7 +190,6 @@ class FullExecutionBenchmarkService:
             dependency_source_root=self.benchmark_repository
         )
         commit_service = AgentGitCommitService()
-        file_indexer = RepositoryFileIndexer()
         snapshot_manager = CommittedSnapshotWorktreeManager(
             repository_root=self.benchmark_repository,
             snapshot_root=self.snapshot_root,
@@ -203,21 +271,72 @@ class FullExecutionBenchmarkService:
                 )
                 analysis_root: Path | None = None
                 try:
-                    # IMPORTANT: Analysis/Snapshot/Patch generation must read from
-                    # the exact commit that the execution worktree will use. Reading
-                    # from the mutable benchmark working tree can produce a proposal
-                    # whose expected_sha256 does not match the clean Git worktree.
                     analysis_root = await snapshot_manager.create(
                         task_id=task.task_id,
                         commit_sha=current_sha,
                     )
-                    selection = task_selections[task.task_id]
-                    current_index = file_indexer.build(analysis_root)
+
+                    # ======================================
+                    # v1.2.3
+                    #
+                    # 每个 Task 都根据当前最新 Commit
+                    # 重新计算：
+                    #
+                    # 1. File Index
+                    # 2. Retrieval
+                    # 3. Semantic Index
+                    # 4. Dependency Graph
+                    # 5. Final Selection
+                    #
+                    # 不再复用 Prepared Input 中
+                    # 最开始生成的 task_selections。
+                    # ======================================
+
+                    context_selection = await self.context_selection_service.select(
+                        repository_root=analysis_root,
+                        repository_revision=current_sha,
+                        task=task,
+                        raw_requirement=case.requirement,
+                        requirement_spec=requirement,
+                    )
+
+                    retrieval_paths = [
+                        item.relative_path
+                        for item in (
+                            context_selection.retrieval_selection.selected_files
+                        )
+                    ]
+
+                    selected_paths = [
+                        item.relative_path
+                        for item in (context_selection.selection.selected_files)
+                    ]
+
+                    retrieval_path_set = set(retrieval_paths)
+
+                    graph_added_paths = [
+                        path
+                        for path in selected_paths
+                        if path not in retrieval_path_set
+                    ]
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "context_revision": (current_sha),
+                            "retrieval_files": (retrieval_paths),
+                            "selected_context_files": (selected_paths),
+                            "graph_added_files": (graph_added_paths),
+                        },
+                    )
+                    current_index = context_selection.index
+
+                    selection = context_selection.selection
                     current_repository = repository.model_copy(
                         deep=True,
                         update={"root_path": str(analysis_root)},
                     )
-                    bundle = self.coordinator.build_resolved_context(
+                    bundle = run_coordinator.build_resolved_context(
                         repository_root=analysis_root,
                         requirement=requirement,
                         technical_spec=technical_spec,
@@ -305,7 +424,7 @@ class FullExecutionBenchmarkService:
                             "an empty PatchPlan"
                         )
 
-                    plan_decision = self.coordinator.guard_patch_plan(
+                    plan_decision = run_coordinator.guard_patch_plan(
                         plan=patch_plan,
                         surface=execution_surface,
                     )
@@ -331,7 +450,7 @@ class FullExecutionBenchmarkService:
                         plan=patch_plan,
                         preparation=preparation,
                     )
-                    proposal_decision = self.coordinator.guard_patch_proposal(
+                    proposal_decision = run_coordinator.guard_patch_proposal(
                         proposal=proposal,
                         surface=execution_surface,
                     )
@@ -395,6 +514,19 @@ class FullExecutionBenchmarkService:
                     commit = await commit_service.commit(
                         workspace=workspace,
                         message=f"benchmark({case.case_id}): {task.task_id} {task.title}",
+                    )
+
+                    execution_artifact = TaskExecutionArtifactBuilder.build(
+                        journal=execution.journal,
+                        completion=execution.completion,
+                        verification=(execution.verification),
+                        base_revision=current_sha,
+                        result_revision=(commit.commit_sha),
+                    )
+
+                    run_coordinator.record_execution(
+                        task=task,
+                        artifact=execution_artifact,
                     )
 
                     task_record = task_record.model_copy(

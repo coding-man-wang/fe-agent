@@ -24,6 +24,14 @@ from agent_core.harness.coordinator import HarnessV1Coordinator
 from agent_core.harness.trace import JsonlHarnessTraceStore
 from agent_core.sdd.task_graph import topological_sort_tasks
 from apps.agent_cli.benchmark_factory import create_benchmark_runner
+from agent_core.codebase.graph import (
+    RepositoryDependencyGraphBuilder,
+    RepositoryGraphContextExpander,
+)
+
+from agent_core.codebase.task_context_selection import (
+    TaskContextSelectionService,
+)
 
 load_dotenv()
 
@@ -73,7 +81,47 @@ def _coordinator_for_baseline(*, fe_agent_root: Path, baseline_run_id: str, llm)
     )
 
 
-async def _prepare_fresh(*, runner, case, benchmark_repository: Path, fe_agent_root: Path):
+def _build_context_selection_service(
+    *,
+    runner,
+) -> TaskContextSelectionService:
+    """
+    创建 Full Execution 使用的
+    “最新代码 Context Selection”服务。
+
+    这里直接复用 Benchmark Runner
+    已经创建好的：
+
+    - Retrieval Service
+    - Embedding / Semantic Index
+    - Code Chunker
+
+    避免再初始化一套模型客户端。
+    """
+
+    capture_service = runner.retrieval_capture_service
+
+    return TaskContextSelectionService(
+        file_indexer=(capture_service.file_indexer),
+        retrieval_service=(capture_service.retrieval_service),
+        code_chunker=(capture_service.code_chunker),
+        semantic_index=(capture_service.semantic_index),
+        graph_builder=(RepositoryDependencyGraphBuilder()),
+        graph_expander=(
+            RepositoryGraphContextExpander(
+                max_files=8,
+                max_graph_files=3,
+                min_retrieval_files=5,
+                dependency_depth=2,
+                dependent_depth=1,
+            )
+        ),
+    )
+
+
+async def _prepare_fresh(
+    *, runner, case, benchmark_repository: Path, fe_agent_root: Path
+):
     baseline = await runner.run(case_id=case.case_id)
     if baseline.status != "completed":
         raise RuntimeError(
@@ -259,21 +307,23 @@ async def main():
     )
 
     print("=== Full Execution Benchmark ===")
+    context_selection_service = _build_context_selection_service(runner=runner)
+
     execution = await FullExecutionBenchmarkService(
         fe_agent_root=fe_agent_root,
-        benchmark_repository=benchmark_repository,
-        baseline_run_id=prepared.baseline_run_id,
+        benchmark_repository=(benchmark_repository),
+        baseline_run_id=(prepared.baseline_run_id),
         llm=llm,
         coordinator=coordinator,
+        context_selection_service=(context_selection_service),
     ).run(
         case=case,
         task_plan=baseline.task_plan,
-        requirement=baseline.requirement_spec,
-        technical_spec=baseline.technical_spec,
+        requirement=(baseline.requirement_spec),
+        technical_spec=(baseline.technical_spec),
         repository=repository,
         engineering_rules=list(baseline.project_context.engineering_rules),
-        task_surfaces=prepared.task_surfaces,
-        task_selections=prepared.task_selections,
+        task_surfaces=(prepared.task_surfaces),
     )
     print(execution.model_dump_json(indent=2))
     print(f"full_execution_run_id={execution.run_id}")

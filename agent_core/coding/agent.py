@@ -55,17 +55,18 @@ JSON 必须符合以下结构：
     "建议执行的验证步骤"
   ],
   "missing_information": [],
-"evidence_gaps": [
-  {
-    "description": "缺少的具体信息",
-    "severity": "blocking 或 advisory",
-    "related_paths": [
-      "相关文件路径"
-    ],
-    "reason": "为什么它会或不会阻塞当前修改决策"
-  }
-],
-"execution_status": "not_executed"
+    "evidence_gaps": [
+      {
+        "description": "缺少的具体信息",
+        "severity": "blocking 或 advisory",
+        "resolution_stage": "analysis 或 verification",
+        "related_paths": [
+          "相关文件路径"
+        ],
+        "reason": "为什么缺少该信息，以及应该在哪个阶段解决"
+      }
+    ]
+    "execution_status": "not_executed"
 }
 
 要求：
@@ -82,23 +83,51 @@ JSON 必须符合以下结构：
    缺少该信息会导致你无法可靠判断：
    - 当前 implementation target 是否需要修改；
    - 应该如何安全修改；
-   - 修改是否违反明确的接口/业务约束。
+   - 修改是否违反明确接口、业务或架构约束。
 
 8. severity = advisory：
-   信息虽然有帮助，但不影响当前是否需要修改的判断。
-   常见情况包括：
-   - reference 文件未完整提供；
-   - 测试覆盖情况未知；
-   - 测试或构建尚未执行；
-   - 缺少运行时日志，但静态代码已经足够判断修改方案。
+   信息虽然有帮助，但不影响当前是否需要修改、
+   或如何修改的判断。
 
-9. 如果你认为某条缺失信息“不阻塞当前任务判断”，
-   必须将其标记为 advisory，
-   不要标记为 blocking。
+9. resolution_stage = analysis：
+   该证据必须通过进一步分析代码、接口、配置、
+   业务规则等方式补齐。
 
-10. 不要因为尚未运行测试、构建或运行时验证，
-    就把 Evidence Gap 标记为 blocking。
-    实际执行验证由后续 Verification Gate 负责。
+   例如：
+   - implementation target 的关键代码未提供；
+   - API contract 不明确；
+   - 无法确认关键业务约束；
+   - 无法判断应该修改哪个模块。
+
+10. resolution_stage = verification：
+    当前静态代码已经足够判断是否需要修改以及如何修改，
+    但还需要后续执行来证明行为正确。
+
+    例如：
+    - 尚未执行 unit test；
+    - 尚未执行 build；
+    - 尚未获取 runtime log；
+    - 尚未获取网络请求记录；
+    - 尚未实际验证是否存在重复请求；
+    - 尚未实际验证 UI interaction。
+
+11. 不要因为尚未运行测试、构建、浏览器或运行时验证，
+    就阻塞当前 Coding Decision。
+
+    如果这些信息只用于证明修改后的行为是否正确：
+    severity 应为 advisory，
+    resolution_stage 应为 verification。
+
+12. 只有当缺少运行时信息导致你连
+    “是否需要修改”或“应该如何修改”
+    都无法判断时，
+    才可以使用：
+    resolution_stage = analysis。
+
+13. resolution_stage = verification 的 Evidence Gap
+    不应被用来扩大 proposed_changes。
+    Verification 负责证明行为，
+    Coding Analysis 负责决定修改。
 """.strip()
 
     def __init__(

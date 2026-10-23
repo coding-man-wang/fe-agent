@@ -116,22 +116,42 @@ class RuntimeExecutionDecisionPolicy:
 
         for gap in gaps:
 
-            # -------------------------------
-            # 模型明确判断 blocking
-            # -------------------------------
+            # -----------------------------------
+            # 1. Verification-stage Evidence
+            #
+            # 这些信息不应该阻止 Coding Decision。
+            #
+            # 例如：
+            # - 测试尚未执行
+            # - runtime log 尚未产生
+            # - 请求轨迹尚未产生
+            # - UI interaction 尚未动态验证
+            #
+            # 它们应该交给后续 Verification Gate。
+            # -----------------------------------
+
+            if gap.resolution_stage == "verification":
+                advisory.append(gap)
+                continue
+
+            # -----------------------------------
+            # 2. Analysis-stage Blocking Gap
+            # -----------------------------------
 
             if gap.severity == "blocking":
                 blocking.append(gap)
                 continue
 
-            # -------------------------------
-            # Harness Safety Escalation
+            # -----------------------------------
+            # 3. Harness Safety Escalation
+            #
+            # 只有 analysis-stage gap 才执行
+            # deterministic safety escalation。
             #
             # 即使模型声称 advisory，
-            # 如果 Evidence Gap 指向当前真正的
-            # implementation target，
-            # Harness 仍然强制 BLOCK。
-            # -------------------------------
+            # 如果它实际上指向 implementation target，
+            # Harness 仍保守阻断。
+            # -----------------------------------
 
             if self._touches_implementation_target(
                 gap=gap,
@@ -139,6 +159,10 @@ class RuntimeExecutionDecisionPolicy:
             ):
                 blocking.append(gap)
                 continue
+
+            # -----------------------------------
+            # 4. 真正 Advisory
+            # -----------------------------------
 
             advisory.append(gap)
 
