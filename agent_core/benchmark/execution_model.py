@@ -9,6 +9,12 @@ from agent_core.coding.verification_model import (
     PatchVerificationResult,
     VerificationCheck,
 )
+from agent_core.codebase.impact import (
+    ChangeImpactReport,
+)
+from agent_core.benchmark.impact_verification import (
+    ImpactVerificationPlan,
+)
 
 TaskExecutionStatus = Literal[
     "skipped_no_change",
@@ -35,6 +41,17 @@ class FullExecutionTaskRecord(BaseModel):
 
     context_revision: str | None = None
 
+    context_retrieval_mode: (
+        Literal[
+            "hybrid",
+            "lexical_only",
+            "lexical_fallback",
+        ]
+        | None
+    ) = None
+
+    semantic_fallback_reason: str | None = None
+
     retrieval_files: list[str] = Field(default_factory=list)
 
     selected_context_files: list[str] = Field(default_factory=list)
@@ -46,6 +63,10 @@ class FullExecutionTaskRecord(BaseModel):
     proposal_id: str | None = None
 
     proposed_files: list[str] = Field(default_factory=list)
+
+    planned_impact: ChangeImpactReport | None = None
+
+    planned_verification: ImpactVerificationPlan | None = None
 
     verification_status: str | None = None
 

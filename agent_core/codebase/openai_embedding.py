@@ -96,10 +96,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
                 )
 
             except Exception as exc:
+
+                cause = f"{type(exc).__name__}: " f"{str(exc).strip() or '<empty>'}"
+
                 raise RuntimeError(
                     "Embedding request failed: "
                     f"model={self.model}, "
-                    f"batch_size={len(batch)}"
+                    f"batch_size={len(batch)}, "
+                    f"cause={cause}"
                 ) from exc
 
             # 根据 index 排序，

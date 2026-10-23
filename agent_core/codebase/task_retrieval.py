@@ -121,6 +121,7 @@ class TaskRetrievalService:
         raw_requirement: str | None = None,
         requirement_spec: RequirementSpec | None = None,
         query_specs: list[RetrievalQuery] | None = None,
+        semantic_enabled: bool = True,
     ) -> HybridRelevantFileSelection:
 
         # Capture 可以提前生成 Query，
@@ -156,10 +157,16 @@ class TaskRetrievalService:
                 max_result=(self.lexical_max_results),
             )
 
-            semantic = await self.semantic_searcher.search(
-                query,
-                top_k=(self.semantic_top_k),
-            )
+            if semantic_enabled:
+                semantic = await self.semantic_searcher.search(
+                    query,
+                    top_k=self.semantic_top_k,
+                )
+            else:
+                semantic = SemanticSearchResponse(
+                    query=query,
+                    results=[],
+                )
 
             hybrid = self.hybrid_retriever.fuse(
                 query=query,

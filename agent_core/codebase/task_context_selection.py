@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-
+from typing import Literal
 from agent_core.codebase.chunker import (
     CodeChunker,
 )
@@ -31,6 +31,12 @@ from agent_core.sdd.model import (
     RequirementSpec,
     TaskDefinition,
 )
+
+ContextRetrievalMode = Literal[
+    "hybrid",
+    "lexical_only",
+    "lexical_fallback",
+]
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,10 @@ class TaskContextSelectionResult:
     graph: RepositoryDependencyGraph
 
     selection: HybridRelevantFileSelection
+
+    retrieval_mode: ContextRetrievalMode
+
+    semantic_error: str | None
 
 
 class TaskContextSelectionService:
@@ -165,10 +175,22 @@ class TaskContextSelectionService:
         #    保证语义索引对应当前 Commit
         # ==================================
 
-        await self._ensure_semantic_index(
+        (
+            semantic_enabled,
+            semantic_error,
+        ) = await self._ensure_semantic_index(
             index=index,
             repository_revision=revision,
         )
+
+        if self.semantic_index is None:
+            retrieval_mode: ContextRetrievalMode = "lexical_only"
+
+        elif semantic_enabled:
+            retrieval_mode = "hybrid"
+
+        else:
+            retrieval_mode = "lexical_fallback"
 
         # ==================================
         # 3. 重新生成检索 Query
@@ -192,6 +214,7 @@ class TaskContextSelectionService:
             task=task,
             index=index,
             query_specs=query_specs,
+            semantic_enabled=(semantic_enabled),
         )
 
         # ==================================
@@ -219,6 +242,8 @@ class TaskContextSelectionService:
             retrieval_selection=(retrieval_selection),
             graph=graph,
             selection=selection,
+            retrieval_mode=retrieval_mode,
+            semantic_error=semantic_error,
         )
 
     async def _ensure_semantic_index(
@@ -226,37 +251,76 @@ class TaskContextSelectionService:
         *,
         index: RepositoryFileIndex,
         repository_revision: str,
-    ) -> None:
+    ) -> tuple[
+        bool,
+        str | None,
+    ]:
         """
-        如果启用了语义搜索，
-        保证 Semantic Index 使用当前代码。
+        保证语义索引对应当前代码版本。
 
-        Commit 没变化：
-            不重复构建。
+        返回：
 
-        Commit 变化：
-            重新从最新代码生成。
+            (True, None)
+                当前版本语义索引可用。
+
+            (False, None)
+                本来就没有配置语义搜索。
+
+            (False, error)
+                配置了语义搜索，
+                但是本次外部请求失败，
+                当前 Task 应降级到关键词搜索。
+
+        特别注意：
+
+        失败以后不能继续使用旧 Commit
+        的 semantic_index。
         """
 
         if self.semantic_index is None:
-            return
+            return (
+                False,
+                None,
+            )
 
         if self.code_chunker is None:
             raise RuntimeError("semantic_index 已配置，" "但 code_chunker 缺失")
 
-        # 当前 Commit 已经构建过。
         if self._semantic_revision == repository_revision:
-            return
+            return (
+                True,
+                None,
+            )
 
         async with self._semantic_build_lock:
 
-            # 等待锁期间可能已经被
-            # 另一个调用构建完成。
             if self._semantic_revision == repository_revision:
-                return
+                return (
+                    True,
+                    None,
+                )
 
             chunks = self.code_chunker.build_chunks(index)
 
-            await self.semantic_index.build(chunks)
+            try:
+                await self.semantic_index.build(chunks)
 
+            except RuntimeError as exc:
+                # Embedding 外部请求失败。
+                #
+                # 不更新 _semantic_revision，
+                # 这样绝不会把旧索引误认为
+                # 当前 Commit 的索引。
+                return (
+                    False,
+                    (f"{type(exc).__name__}: " f"{exc}"),
+                )
+
+            # 只有真正成功以后
+            # 才更新 revision。
             self._semantic_revision = repository_revision
+
+            return (
+                True,
+                None,
+            )
