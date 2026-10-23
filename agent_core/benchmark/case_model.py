@@ -121,6 +121,50 @@ class BenchmarkExpectation(BaseModel):
         min_length=1,
     )
 
+    # ---------------------------------
+    # v1.2.4 Impact Analysis Oracle
+    # ---------------------------------
+
+    required_impact_files: list[str] = Field(
+        default_factory=list,
+    )
+
+    required_impact_verification_command_ids: list[str] = Field(
+        default_factory=list,
+    )
+
+
+class BenchmarkImpactOracle(BaseModel):
+    """
+    Impact Analysis 阶段的标准答案。
+
+    required_impact_files:
+        本次需求执行过程中，
+        影响分析至少应该发现的文件。
+
+        这里评价的是：
+        “值得重点检查”
+
+        不是：
+        “必须修改”。
+
+    required_verification_command_ids:
+        影响分析后至少应该进入
+        Verification Plan 的验证命令。
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    required_impact_files: list[str] = Field(
+        default_factory=list,
+    )
+
+    required_verification_command_ids: list[str] = Field(
+        default_factory=list,
+    )
+
 
 class BenchmarkCase(BaseModel):
     model_config = ConfigDict(
@@ -279,4 +323,23 @@ class BenchmarkCase(BaseModel):
             expected_change_files=list(expectation.expected_change_files),
             allowed_change_files=list(expectation.allowed_change_files),
             forbidden_change_files=list(expectation.forbidden_change_files),
+        )
+
+    def impact_oracle(
+        self,
+    ) -> BenchmarkImpactOracle:
+        """
+        v1.2.4 Impact Analysis Evaluator 使用。
+
+        没有配置 Impact Oracle 的旧 Case，
+        返回空 Oracle，不参与 Impact Gate。
+        """
+
+        expectation = self.expectation
+
+        return BenchmarkImpactOracle(
+            required_impact_files=list(expectation.required_impact_files),
+            required_verification_command_ids=list(
+                expectation.required_impact_verification_command_ids
+            ),
         )

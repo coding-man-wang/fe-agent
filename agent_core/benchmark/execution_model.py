@@ -95,7 +95,43 @@ class FullExecutionEvaluation(BaseModel):
     verification_passed: bool = False
     hidden_acceptance_passed: bool = False
     failure_reasons: list[str] = Field(default_factory=list)
+    # =====================================
+    # v1.2.4 Impact Analysis Evaluation
+    # =====================================
 
+    expected_impact_files: list[str] = Field(
+        default_factory=list
+    )
+
+    observed_impact_files: list[str] = Field(
+        default_factory=list
+    )
+
+    missed_impact_files: list[str] = Field(
+        default_factory=list
+    )
+
+    required_impact_verification_command_ids: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
+    observed_verification_command_ids: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
+    missing_impact_verification_command_ids: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
+    impact_coverage_passed: bool = True
+
+    impact_verification_passed: bool = True
 
 class FullExecutionRunRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")

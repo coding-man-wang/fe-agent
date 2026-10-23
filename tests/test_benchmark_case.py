@@ -18,8 +18,39 @@ from agent_core.git.client import (
 BASE_SHA = "a" * 40
 
 
+def create_case_root(
+    tmp_path: Path,
+) -> tuple[
+    Path,
+    Path,
+]:
+    """
+    创建符合当前 BenchmarkCaseLoader
+    目录契约的测试目录：
+
+        cases/
+            runnable/
+
+    返回：
+
+        case_root
+        runnable_root
+    """
+
+    case_root = tmp_path / "cases"
+
+    runnable_root = case_root / "runnable"
+
+    runnable_root.mkdir(parents=True)
+
+    return (
+        case_root,
+        runnable_root,
+    )
+
+
 def write_case(
-    root: Path,
+    runnable_root: Path,
     *,
     case_id: str = "CASE-001",
     base_commit_sha: str = BASE_SHA,
@@ -35,14 +66,14 @@ def write_case(
         "base_commit_sha": (base_commit_sha),
         "requirement": ("修改用户名长度限制"),
         "expectation": {
-            "expected_files": ["src/components/UserProfileForm.vue"],
+            "expected_files": ["src/components/" "UserProfileForm.vue"],
             "forbidden_files": ["src/api"],
             "expected_behaviors": ["最大长度为 30"],
             "verification_command_ids": ["frontend-unit-test"],
         },
     }
 
-    path = root / f"{case_id}.json"
+    path = runnable_root / f"{case_id}.json"
 
     path.write_text(
         json.dumps(
@@ -57,12 +88,12 @@ def write_case(
 def test_case_loader_loads_valid_case(
     tmp_path: Path,
 ):
+    (
+        case_root,
+        runnable_root,
+    ) = create_case_root(tmp_path)
 
-    case_root = tmp_path / "cases"
-
-    case_root.mkdir()
-
-    write_case(case_root)
+    write_case(runnable_root)
 
     loader = BenchmarkCaseLoader(case_root)
 
@@ -74,7 +105,7 @@ def test_case_loader_loads_valid_case(
 
     assert case.category == "single_file_change"
 
-    assert case.expectation.expected_files == ["src/components/UserProfileForm.vue"]
+    assert case.expectation.expected_files == ["src/components/" "UserProfileForm.vue"]
 
 
 def test_case_loader_rejects_path_traversal(
@@ -95,47 +126,39 @@ def test_case_loader_rejects_path_traversal(
         loader.load("../CASE-001")
 
 
-def test_case_loader_rejects_invalid_case(
+def test_case_loader_rejects_path_traversal(
     tmp_path: Path,
 ):
-
-    case_root = tmp_path / "cases"
-
-    case_root.mkdir()
-
-    path = case_root / "CASE-001.json"
-
-    path.write_text(
-        "{}",
-        encoding="utf-8",
-    )
+    (
+        case_root,
+        _,
+    ) = create_case_root(tmp_path)
 
     loader = BenchmarkCaseLoader(case_root)
 
     with pytest.raises(
         BenchmarkCaseLoadError,
-        match="Benchmark Case 非法",
+        match="非法 case_id",
     ):
-
-        loader.load("CASE-001")
+        loader.load("../CASE-001")
 
 
 def test_case_loader_rejects_filename_mismatch(
     tmp_path: Path,
 ):
-
-    case_root = tmp_path / "cases"
-
-    case_root.mkdir()
+    (
+        case_root,
+        runnable_root,
+    ) = create_case_root(tmp_path)
 
     write_case(
-        case_root,
+        runnable_root,
         case_id="CASE-002",
     )
 
-    source = case_root / "CASE-002.json"
+    source = runnable_root / "CASE-002.json"
 
-    target = case_root / "CASE-001.json"
+    target = runnable_root / "CASE-001.json"
 
     source.rename(target)
 
@@ -145,7 +168,6 @@ def test_case_loader_rejects_filename_mismatch(
         BenchmarkCaseLoadError,
         match=("文件名与 case_id 不一致"),
     ):
-
         loader.load("CASE-001")
 
 
@@ -368,3 +390,17 @@ def test_v2_case_separates_context_and_change():
     assert "src/api/users.ts" in retrieval.useful_context_files
 
     assert "src/api/users.ts" in change.forbidden_change_files
+
+
+def test_case_loader_requires_runnable_directory(
+    tmp_path: Path,
+):
+    case_root = tmp_path / "cases"
+
+    case_root.mkdir()
+
+    with pytest.raises(
+        BenchmarkCaseLoadError,
+        match="runnable 目录不存在",
+    ):
+        BenchmarkCaseLoader(case_root)

@@ -43,6 +43,13 @@
       "frontend-typecheck",
       "frontend-unit-test",
       "frontend-build"
+    ],
+    "required_impact_files": [
+      "src/views/UsersView.vue",
+      "tests/unit/usersStore.test.ts"
+    ],
+    "required_impact_verification_command_ids": [
+      "frontend-e2e"
     ]
   }
 }
