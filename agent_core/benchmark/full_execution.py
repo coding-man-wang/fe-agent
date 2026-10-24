@@ -15,7 +15,10 @@ from agent_core.benchmark.execution_model import (
     FullExecutionTaskRecord,
 )
 from agent_core.benchmark.execution_store import FullExecutionRunStore
-from agent_core.benchmark.execution_surface import ProductionExecutionSurfacePolicy
+from agent_core.benchmark.execution_surface import (
+    ProductionExecutionSurfacePolicy,
+    TestExecutionSurfacePolicy,
+)
 from agent_core.benchmark.git_diff import GitDiffCollector
 from agent_core.benchmark.git_workspace import RunScopedGitWorkspaceManager
 from agent_core.benchmark.text_model import LLMTextModelAdapter
@@ -63,6 +66,14 @@ from agent_core.codebase.impact import (
 )
 from agent_core.benchmark.impact_verification import (
     ImpactAwareVerificationPlanner,
+)
+from agent_core.benchmark.task_verification import TaskVerificationCommandPolicy
+from agent_core.benchmark.final_verification import (
+    FinalVerificationPlanner,
+)
+
+from agent_core.coding.verification_executor import (
+    VerificationExecutor,
 )
 
 
@@ -187,7 +198,7 @@ class FullExecutionBenchmarkService:
         verification_policy = build_frontend_verification_policy()
 
         impact_verification_planner = ImpactAwareVerificationPlanner()
-
+        final_verification_planner = FinalVerificationPlanner()
         reviewer = PatchReviewer()
         workspace_manager = RunScopedGitWorkspaceManager(
             run_id=self.run_id,
@@ -214,14 +225,97 @@ class FullExecutionBenchmarkService:
 
         try:
             for task in topological_sort_tasks(task_plan):
-                if task.task_type != "code_change":
+                if task.task_type == "investigation":
                     task_records.append(
                         FullExecutionTaskRecord(
                             task_id=task.task_id,
                             task_type=task.task_type,
-                            status="skipped_non_code_task",
+                            status=("skipped_non_code_task"),
                         )
                     )
+                    continue
+
+                if task.task_type == "verification":
+
+                    final_plan = final_verification_planner.build(
+                        base_command_ids=list(
+                            case.expectation.verification_command_ids
+                        ),
+                        task_records=task_records,
+                    )
+
+                    verification_run_id = hashlib.sha256(
+                        (
+                            f"{case.case_id}:"
+                            f"{task.task_id}:"
+                            f"{current_sha}:"
+                            "final-verification-v1"
+                        ).encode("utf-8")
+                    ).hexdigest()
+
+                    # 当前 root 就是最后一个成功
+                    # Side Effect Task 对应的最新 Worktree。
+                    #
+                    # 如果当前是源仓库，
+                    # provision() 发现 node_modules 已存在时
+                    # 只会执行 readiness validation。
+                    dependency_provisioner.provision(current_root)
+
+                    verification_plan = VerificationPlan(
+                        proposal_id=(verification_run_id),
+                        task_id=task.task_id,
+                        command_ids=list(final_plan.final_command_ids),
+                    )
+
+                    executor = VerificationExecutor(
+                        repository_root=current_root,
+                        policy=verification_policy,
+                    )
+
+                    result = await executor.run(plan=verification_plan)
+
+                    executed_command_ids = [
+                        check.command_id
+                        for check in result.checks
+                        if check.command_id is not None
+                    ]
+
+                    task_record = FullExecutionTaskRecord(
+                        task_id=task.task_id,
+                        task_type=task.task_type,
+                        status=("completed" if result.status == "passed" else "failed"),
+                        base_commit_sha=current_sha,
+                        # Final Verification 验证的
+                        # 就是这个最终 Revision。
+                        context_revision=current_sha,
+                        planned_verification=(final_plan),
+                        scheduled_verification_command_ids=(
+                            list(final_plan.final_command_ids)
+                        ),
+                        executed_verification_command_ids=(executed_command_ids),
+                        verification_status=(
+                            "succeeded" if result.status == "passed" else "failed"
+                        ),
+                        verification_checks=list(result.checks),
+                        error=(
+                            None
+                            if result.status == "passed"
+                            else ("Final Verification " "failed")
+                        ),
+                    )
+
+                    task_records.append(task_record)
+
+                    record = record.model_copy(
+                        deep=True,
+                        update={"tasks": task_records},
+                    )
+
+                    self.store.save(record)
+
+                    if result.status != "passed":
+                        raise FullExecutionBenchmarkError("Final Verification failed")
+
                     continue
 
                 surface = task_surfaces.get(task.task_id)
@@ -254,12 +348,22 @@ class FullExecutionBenchmarkService:
                     task_records.append(blocked)
                     raise FullExecutionBenchmarkError(blocked.error)
 
-                # v1.1 RC only executes production-code changes. The task-level
-                # Change Surface can still contain test files because tests are useful
-                # evidence and may be authored in a later phase. Convert them to
-                # read-only references *before* building Coding Context so the model
-                # and the runtime share the same execution boundary.
-                execution_surface = execution_surface_policy.apply(surface)
+                production_surface_policy = ProductionExecutionSurfacePolicy()
+
+                test_surface_policy = TestExecutionSurfacePolicy()
+
+                if task.task_type == "code_change":
+
+                    execution_surface = production_surface_policy.apply(surface)
+
+                elif task.task_type == "test":
+
+                    execution_surface = test_surface_policy.apply(surface)
+
+                else:
+                    raise FullExecutionBenchmarkError(
+                        "不支持的 Side Effect Task: " f"{task.task_type}"
+                    )
 
                 if not execution_surface.requires_patch():
                     task_records.append(
@@ -545,11 +649,27 @@ class FullExecutionBenchmarkService:
                     )
                     dependency_provisioner.provision(workspace.worktree_path)
 
+                    task_verification_policy = TaskVerificationCommandPolicy()
+                    task_command_ids = task_verification_policy.for_task(
+                        task=task,
+                        base_command_ids=list(planned_verification.final_command_ids),
+                    )
+
                     verification_plan = VerificationPlan(
                         proposal_id=review.proposal_id,
                         task_id=task.task_id,
-                        command_ids=list(planned_verification.final_command_ids),
+                        command_ids=task_command_ids,
                     )
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "scheduled_verification_command_ids": (
+                                list(task_command_ids)
+                            ),
+                        },
+                    )
+
                     execution = await WorkspaceExecutionService(
                         runtime_root=self.runtime_state_root,
                         approval_store=approval_store,
@@ -562,9 +682,42 @@ class FullExecutionBenchmarkService:
                         proposal=proposal,
                         verification_plan=verification_plan,
                     )
+
                     commit = await commit_service.commit(
                         workspace=workspace,
                         message=f"benchmark({case.case_id}): {task.task_id} {task.title}",
+                    )
+
+                    verification_checks = []
+
+                    if execution.verification.result is not None:
+                        verification_checks = list(execution.verification.result.checks)
+
+                    executed_command_ids = [
+                        check.command_id
+                        for check in verification_checks
+                        if check.command_id is not None
+                    ]
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "status": "completed",
+                            "workspace_id": (workspace.workspace_id),
+                            "proposal_id": (review.proposal_id),
+                            "proposed_files": sorted(
+                                patch.relative_path for patch in proposal.patches
+                            ),
+                            "scheduled_verification_command_ids": (
+                                list(verification_plan.command_ids)
+                            ),
+                            "executed_verification_command_ids": (executed_command_ids),
+                            "verification_status": (execution.verification.status),
+                            "verification_checks": (verification_checks),
+                            "completion_status": (execution.completion.status),
+                            "commit_sha": (commit.commit_sha),
+                            "error": None,
+                        },
                     )
 
                     execution_artifact = TaskExecutionArtifactBuilder.build(
@@ -625,6 +778,17 @@ class FullExecutionBenchmarkService:
                                 for check in verification_checks
                                 if check.status == "failed"
                             ]
+
+                            verification_checks = list(
+                                verification_record.result.checks
+                            )
+
+                            executed_verification_command_ids = [
+                                check.command_id
+                                for check in verification_checks
+                                if check.command_id is not None
+                            ]
+
                             if failed_checks:
                                 details = "\n\n".join(
                                     f"[{check.name}] {check.status}\n{check.details}"

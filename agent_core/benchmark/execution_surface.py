@@ -51,3 +51,74 @@ class ProductionExecutionSurfacePolicy:
             seen.add(normalized)
             result.append(normalized)
         return result
+
+
+class TestExecutionSurfacePolicy:
+    """
+    Test Task 的 Side Effect Boundary。
+
+    test task：
+
+    - production implementation targets 只能读取；
+    - surface.tests 才允许修改；
+    - dependencies / references 继续只读。
+
+    这样测试任务不能借机修改生产代码。
+    """
+
+    def apply(
+        self,
+        surface: ResolvedChangeSurface,
+    ) -> ResolvedChangeSurface:
+
+        references = self._dedupe_preserving_order(
+            [
+                *surface.references,
+                *surface.dependencies,
+                *surface.implementation_targets,
+            ]
+        )
+
+        rationale = [
+            *surface.rationale,
+            (
+                "execution-policy: test task "
+                "只允许修改测试文件；"
+                "production targets "
+                "保留为只读 reference。"
+            ),
+        ]
+
+        return surface.model_copy(
+            deep=True,
+            update={
+                "implementation_targets": [],
+                "dependencies": [],
+                "references": references,
+                # 保留测试文件可写。
+                "tests": list(surface.tests),
+                "rationale": rationale,
+            },
+        )
+
+    @staticmethod
+    def _dedupe_preserving_order(
+        paths: list[str],
+    ) -> list[str]:
+
+        seen: set[str] = set()
+
+        result: list[str] = []
+
+        for path in paths:
+
+            normalized = path.replace("\\", "/").strip()
+
+            if not normalized or normalized in seen:
+                continue
+
+            seen.add(normalized)
+
+            result.append(normalized)
+
+        return result

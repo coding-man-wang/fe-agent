@@ -38,16 +38,31 @@ load_dotenv()
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="FE-Agent v1.1 Full Execution Benchmark"
+        description=("FE-Agent v1.1 Full Execution Benchmark")
     )
+
+    parser.add_argument(
+        "--case-id",
+        default="CASE-006",
+        help=(
+            "要执行的 Benchmark Case ID，"
+            "例如 CASE-001 / CASE-006。"
+            "默认 CASE-006。"
+        ),
+    )
+
     parser.add_argument(
         "--refresh-upstream",
         action="store_true",
         help=(
-            "重新运行 Planning/Retrieval/Investigation/Change Surface。"
-            "默认 v1.1 会复用已经通过 v1.0 Gate 的 Prepared Execution Input。"
+            "重新运行 Planning/Retrieval/"
+            "Investigation/Change Surface。"
+            "默认 v1.1 会复用已经通过 "
+            "v1.0 Gate 的 "
+            "Prepared Execution Input。"
         ),
     )
+
     return parser.parse_args()
 
 
@@ -229,7 +244,7 @@ async def main():
     args = _parse_args()
     fe_agent_root = Path(__file__).resolve().parents[2]
     benchmark_repository = Path(r"D:\project\fe-agent-benchmark-web")
-    case_id = "CASE-006"
+    case_id = args.case_id
 
     dependency_preflight = NodeModulesWorkspaceProvisioner(
         dependency_source_root=benchmark_repository

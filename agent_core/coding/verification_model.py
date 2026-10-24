@@ -38,6 +38,8 @@ class VerificationCheck(BaseModel):
 
     details: str = ""
 
+    command_id: str | None = None
+
 
 class PatchVerificationResult(BaseModel):
     """

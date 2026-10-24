@@ -23,17 +23,42 @@ class HiddenAcceptanceSpec:
 
 
 class HiddenAcceptanceRegistry:
-    def get(self, case_id: str) -> HiddenAcceptanceSpec:
-        if case_id == "CASE-006":
-            return HiddenAcceptanceSpec(
-                fixture_name="CASE-006.test.ts",
+
+    SPECS: dict[
+        str,
+        HiddenAcceptanceSpec,
+    ] = {
+        "CASE-001": (
+            HiddenAcceptanceSpec(
+                fixture_name=("CASE-001.test.ts"),
                 relative_path=(
-                    "tests/unit/__fe_agent_hidden__/CASE-006.acceptance.test.ts"
+                    "tests/unit/" "__fe_agent_hidden__/" "CASE-001.acceptance.test.ts"
                 ),
             )
-        raise HiddenAcceptanceError(
-            f"v1.1 尚未为 {case_id} 定义 hidden acceptance test"
-        )
+        ),
+        "CASE-006": (
+            HiddenAcceptanceSpec(
+                fixture_name=("CASE-006.test.ts"),
+                relative_path=(
+                    "tests/unit/" "__fe_agent_hidden__/" "CASE-006.acceptance.test.ts"
+                ),
+            )
+        ),
+    }
+
+    def get(
+        self,
+        case_id: str,
+    ) -> HiddenAcceptanceSpec:
+
+        spec = self.SPECS.get(case_id)
+
+        if spec is None:
+            raise HiddenAcceptanceError(
+                "v1.1 尚未为 " f"{case_id} " "定义 hidden acceptance test"
+            )
+
+        return spec
 
 
 class HiddenAcceptanceRunner:
@@ -61,7 +86,9 @@ class HiddenAcceptanceRunner:
         test_path = root / spec.relative_path
         test_path.parent.mkdir(parents=True, exist_ok=True)
         if test_path.exists():
-            raise HiddenAcceptanceError(f"Hidden test path 已存在: {spec.relative_path}")
+            raise HiddenAcceptanceError(
+                f"Hidden test path 已存在: {spec.relative_path}"
+            )
 
         npm = shutil.which("npm")
         if not npm:

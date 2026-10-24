@@ -5,7 +5,7 @@
   "category": "single_file_change",
   "difficulty": "easy",
   "repository_name": "fe-agent-benchmark-web",
-  "base_commit_sha": "253ad1552a9606c4e6e77435adeed75a53fa2b6a",
+  "base_commit_sha": "716531d63d9103659c8738c8c3dd17ef148c2ebf",
   "requirement": "调整用户资料表单中的用户名校验规则：用户名最大长度修改为 30 个字符。保持项目现有校验与错误提示风格，不修改 API、Router、Store 等无关模块，并保证现有测试和构建继续通过。",
   "expectation": {
     "required_context_files": [
@@ -40,6 +40,13 @@
       "frontend-typecheck",
       "frontend-unit-test",
       "frontend-build"
+    ],
+    "required_impact_files": [
+      "src/views/UserDetailView.vue",
+      "tests/unit/UserProfileForm.test.ts"
+    ],
+    "required_impact_verification_command_ids": [
+      "frontend-unit-test"
     ]
   }
 }

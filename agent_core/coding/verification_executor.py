@@ -213,6 +213,7 @@ class VerificationExecutor:
 
         checks = [
             VerificationCheck(
+                command_id=result.command_id,
                 name=result.name,
                 status=("passed" if result.status == "passed" else "failed"),
                 details=self._format_details(result),
