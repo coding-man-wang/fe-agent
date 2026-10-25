@@ -21,6 +21,7 @@ TaskExecutionStatus = Literal[
     "skipped_no_production_change",
     "skipped_runtime_noop",
     "skipped_non_code_task",
+    "skipped_redundant_verification",
     "completed",
     "failed",
 ]

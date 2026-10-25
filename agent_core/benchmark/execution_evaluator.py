@@ -67,10 +67,9 @@ class FullExecutionEvaluator:
 
                 observed_impact_set.update(impact.suggested_test_files)
 
-            planned_verification = task_record.planned_verification
-
-            if planned_verification is not None:
-                observed_verification_set.update(planned_verification.final_command_ids)
+            observed_verification_set.update(
+                task_record.executed_verification_command_ids
+            )
 
         allowed = sorted(set(oracle.allowed_change_files))
         forbidden = sorted(set(oracle.forbidden_change_files))
@@ -92,9 +91,25 @@ class FullExecutionEvaluator:
         failed_task_ids = sorted(
             record.task_id for record in task_records if record.status == "failed"
         )
-        executed = [record for record in task_records if record.status == "completed"]
-        verification_passed = bool(executed) and all(
-            record.verification_status == "succeeded" for record in executed
+        completed = [record for record in task_records if record.status == "completed"]
+
+        completed_verification_tasks = [
+            record for record in completed if (record.task_type == "verification")
+        ]
+
+        verified_tasks = [
+            record
+            for record in completed
+            if record.task_type
+            in {
+                "code_change",
+                "test",
+                "verification",
+            }
+        ]
+
+        verification_passed = bool(completed_verification_tasks) and all(
+            record.verification_status == "succeeded" for record in verified_tasks
         )
         hidden_passed = (
             hidden_acceptance is not None and hidden_acceptance.status == "passed"
@@ -131,10 +146,6 @@ class FullExecutionEvaluator:
         reasons: list[str] = []
         if missed:
             reasons.append("missing_expected_change")
-        if missed_impacts:
-            reasons.append("missing_required_impact")
-        if missing_impact_commands:
-            reasons.append("missing_impact_verification")
         if expected_impacts and missed_impacts:
             reasons.append("missing_required_impact")
         if required_impact_commands and missing_impact_commands:
@@ -159,7 +170,7 @@ class FullExecutionEvaluator:
             missed_change_files=missed,
             unexpected_change_files=unexpected,
             forbidden_change_hits=forbidden_hits,
-            completed_task_count=len(executed),
+            completed_task_count=len(completed),
             failed_task_ids=failed_task_ids,
             verification_passed=verification_passed,
             hidden_acceptance_passed=hidden_passed,

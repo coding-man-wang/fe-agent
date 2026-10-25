@@ -27,6 +27,7 @@ class TaskVerificationCommandPolicy:
 
     TEST_COMMANDS = {
         "frontend-unit-test",
+        "frontend-e2e",
     }
 
     def for_task(

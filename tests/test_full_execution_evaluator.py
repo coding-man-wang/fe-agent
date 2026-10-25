@@ -237,6 +237,12 @@ def _completed_task(
         planned_verification=(verification),
         verification_status="succeeded",
         verification_checks=[],
+        scheduled_verification_command_ids=[
+            "frontend-unit-test",
+        ],
+        executed_verification_command_ids=[
+            "frontend-unit-test",
+        ],
         completion_status="completed",
         commit_sha="2" * 40,
         error=None,
@@ -529,3 +535,21 @@ def test_evaluator_fails_when_required_impact_verification_is_missing():
     assert evaluation.verification_passed is True
 
     assert evaluation.hidden_acceptance_passed is True
+
+
+def _final_verification_task(
+    *,
+    executed_commands: list[str],
+) -> FullExecutionTaskRecord:
+
+    return FullExecutionTaskRecord(
+        task_id="TASK-999",
+        task_type="verification",
+        status="completed",
+        base_commit_sha="2" * 40,
+        context_revision="2" * 40,
+        scheduled_verification_command_ids=(list(executed_commands)),
+        executed_verification_command_ids=(list(executed_commands)),
+        verification_status=("succeeded"),
+        verification_checks=[],
+    )
