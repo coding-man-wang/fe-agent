@@ -139,7 +139,77 @@ JSON 必须符合以下结构：
     不应被用来扩大 proposed_changes。
     Verification 负责证明行为，
     Coding Analysis 负责决定修改。
+14. 不要基于未提供证据的“假设性项目约定”
+    创建 blocking evidence gap。
+
+    例如：
+    “如果项目约定必须使用某个常量……”
+    只有当 Code Context、Requirement、
+    Engineering Rules 或 Upstream Artifacts
+    中存在该约定证据时，才能作为 blocker。
+
+15. 如果你已经明确判断某项缺失信息
+    “不影响当前任务判断”、
+    “不影响是否需要修改”或
+    “当前代码已经足够判断”，
+    severity 不允许为 blocking。
+
+16. 当前 Task 可能运行在前序任务已经修改后的
+    最新 Repository Revision 上。
+
+    如果当前最新代码已经满足本 Task，
+    应返回：
+    proposed_changes = []
+    并且不要为了执行原计划而重复修改代码。
 """.strip()
+
+    RUNTIME_RECONCILIATION_REVIEW_INSTRUCTION = """
+    你正在进行 Runtime Reconciliation Review。
+
+    当前 Repository Context 来自前序任务已经提交后的最新 Revision。
+    因此当前 Task 原计划要求的修改，可能已经被上游 Task 完成。
+
+    请重新判断：
+
+    1. 当前最新代码是否仍然需要任何修改。
+    2. 如果当前代码已经满足本 Task：
+       - proposed_changes 必须为空；
+       - 不要为了避免 noop 而制造新的 blocking evidence gap。
+
+    3. blocking evidence gap 只有在缺少该信息会导致你无法判断：
+       - 当前代码是否还需要修改；
+       - 或剩余修改应该如何安全完成；
+       时才允许存在。
+
+    4. 不要基于没有证据的假设性项目约定制造 blocker。
+
+       例如：
+       - “如果项目约定必须使用某个常量……”
+       - “如果项目可能存在另外一种规范……”
+       - “可能还有未提供的 helper……”
+
+       如果当前 Code Context、Requirement、Engineering Rules、
+       Change Surface 和 Upstream Artifacts 都没有提供这种约束证据，
+       不得把这种假设作为 blocking evidence gap。
+
+    5. 如果你在 description 或 reason 中已经判断：
+       - “不影响当前任务判断”
+       - “当前实现已经足够”
+       - “不影响是否需要修改”
+       那么该 Evidence Gap 不允许标记为 blocking。
+
+    6. 如果当前静态代码已经足以判断无需继续修改：
+       返回：
+       - proposed_changes = []
+       - evidence_gaps = []
+         或仅保留真正 advisory 的 gap。
+
+    7. 如果经过重新检查后仍然存在真实 blocker，
+       请继续保留 blocking evidence gap。
+       不要为了让流程通过而删除真实风险。
+
+    仍然必须严格遵守原始 Coding Analysis JSON 契约。
+    """.strip()
 
     @staticmethod
     def _normalize_evidence_layout(
@@ -472,3 +542,34 @@ JSON 必须符合以下结构：
         )
 
         return result
+
+    def prepare_runtime_reconciliation_messages(
+        self,
+        messages: RenderedContext,
+    ) -> RenderedContext:
+        """
+        当第一次 Coding Analysis：
+
+            没有 proposed_changes
+            +
+            返回 blocking evidence gap
+
+        时，进行一次有限的 Runtime
+        Reconciliation Review。
+
+        注意：
+
+        这里只重新判断最新 Revision 是否
+        仍然需要修改。
+
+        不降低 Harness Safety Gate。
+        """
+
+        return RenderedContext(
+            system_message=(
+                messages.system_message
+                + "\n\n"
+                + self.RUNTIME_RECONCILIATION_REVIEW_INSTRUCTION
+            ),
+            user_message=(messages.user_message),
+        )

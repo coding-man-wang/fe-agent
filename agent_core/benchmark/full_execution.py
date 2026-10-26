@@ -492,7 +492,9 @@ class FullExecutionBenchmarkService:
                     self.store.save(record)
 
                     if result.status != "passed":
-                        raise (FullExecutionBenchmarkError("Final Verification " "failed"))
+                        raise (
+                            FullExecutionBenchmarkError("Final Verification " "failed")
+                        )
 
                     # Final Verification 已成功。
                     #
@@ -712,25 +714,13 @@ class FullExecutionBenchmarkService:
 
                     messages = coding_agent.prepare_messages(bundle)
 
-                    context_hash = calculate_messages_hash(messages)
+                    analysis_messages = messages
+
+                    analysis_attempts = 1
 
                     analysis = await coding_agent.analyze_prepared(
-                        bundle=(bundle),
-                        messages=(messages),
-                    )
-
-                    analysis_record = TaskAnalysisRecord(
-                        task_id=(task.task_id),
-                        status=("succeeded"),
-                        attempts=1,
-                        result=(analysis),
-                        context_hash=(context_hash),
-                    )
-
-                    artifact, _ = analysis_store.publish(
                         bundle=bundle,
-                        record=(analysis_record),
-                        context_hash=(context_hash),
+                        messages=analysis_messages,
                     )
 
                     # ==================================
@@ -739,7 +729,73 @@ class FullExecutionBenchmarkService:
 
                     runtime_decision = runtime_execution_policy.decide(
                         analysis,
-                        surface=(execution_surface),
+                        surface=execution_surface,
+                    )
+
+                    # ==================================
+                    # Bounded Reconciliation Review
+                    #
+                    # 第一次分析：
+                    #
+                    #   no proposed changes
+                    #       +
+                    #   blocking evidence gap
+                    #
+                    # 不立刻降低 Safety Gate，
+                    # 而是基于同一份最新 Revision Context
+                    # 给 Agent 一次重新判断机会。
+                    #
+                    # 第二次仍 blocking：
+                    #     Harness 正常阻断。
+                    #
+                    # 第二次确认无需修改：
+                    #     skip_runtime_noop。
+                    # ==================================
+
+                    if (
+                        runtime_decision.action == "block_insufficient_evidence"
+                        and not analysis.proposed_changes
+                    ):
+                        analysis_messages = (
+                            coding_agent.prepare_runtime_reconciliation_messages(
+                                messages
+                            )
+                        )
+
+                        analysis = await coding_agent.analyze_prepared(
+                            bundle=bundle,
+                            messages=(analysis_messages),
+                        )
+
+                        analysis_attempts += 1
+
+                        runtime_decision = runtime_execution_policy.decide(
+                            analysis,
+                            surface=(execution_surface),
+                        )
+
+                    # ==================================
+                    # Publish Final Analysis
+                    #
+                    # 注意：
+                    # 发布的是最终真正被 Harness
+                    # 用于 Runtime Decision 的分析结果。
+                    # ==================================
+
+                    context_hash = calculate_messages_hash(analysis_messages)
+
+                    analysis_record = TaskAnalysisRecord(
+                        task_id=(task.task_id),
+                        status="succeeded",
+                        attempts=(analysis_attempts),
+                        result=analysis,
+                        context_hash=(context_hash),
+                    )
+
+                    artifact, _ = analysis_store.publish(
+                        bundle=bundle,
+                        record=(analysis_record),
+                        context_hash=(context_hash),
                     )
 
                     if runtime_decision.action == "skip_runtime_noop":
