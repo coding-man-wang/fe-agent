@@ -121,3 +121,57 @@ class ImpactAwareVerificationPlanner:
             result.append(normalized)
 
         return result
+
+    def build_for_test_files(
+        self,
+        *,
+        base_command_ids: list[str],
+        test_files: list[str],
+    ) -> ImpactVerificationPlan:
+        """
+        Patch 最终 no-op 时，
+        根据原计划涉及的测试文件，
+        保留对应 Verification Intent。
+
+        例如：
+
+            tests/e2e/users.spec.ts
+
+        即使最终没有产生 Patch，
+        Final Verification 仍然应该跑 E2E。
+        """
+
+        final = self._dedupe(base_command_ids)
+
+        added: list[str] = []
+        reasons: list[str] = []
+
+        normalized_files = [path.replace("\\", "/").lower() for path in test_files]
+
+        has_unit = any(
+            ("/unit/" in path or ".test." in path) and "/e2e/" not in path
+            for path in normalized_files
+        )
+
+        has_e2e = any("/e2e/" in path for path in normalized_files)
+
+        if has_unit and self.UNIT_COMMAND not in final:
+            final.append(self.UNIT_COMMAND)
+
+            added.append(self.UNIT_COMMAND)
+
+            reasons.append("Late no-op 涉及 unit test，" "保留 frontend-unit-test")
+
+        if has_e2e and self.E2E_COMMAND not in final:
+            final.append(self.E2E_COMMAND)
+
+            added.append(self.E2E_COMMAND)
+
+            reasons.append("Late no-op 涉及 E2E test，" "保留 frontend-e2e")
+
+        return ImpactVerificationPlan(
+            base_command_ids=(self._dedupe(base_command_ids)),
+            added_command_ids=(added),
+            final_command_ids=(final),
+            reasons=reasons,
+        )

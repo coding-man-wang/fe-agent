@@ -74,19 +74,46 @@ class ChangeSurfaceResolver:
         candidate_targets = self._candidate_target_paths(upstream_investigations)
 
         payload = {
-            "task": bundle.task.model_dump(mode="json"),
-            "requirement": bundle.requirement.model_dump(mode="json"),
-            "technical_spec": bundle.technical_spec.model_dump(mode="json"),
+            "task": (bundle.task.model_dump(mode="json")),
+            "requirement": (bundle.requirement.model_dump(mode="json")),
+            "technical_spec": (bundle.technical_spec.model_dump(mode="json")),
+            # ==================================
+            # Current Revision Code Context
+            #
+            # 这是当前 Repository Revision
+            # 中真正的源码内容。
+            #
+            # Investigation Artifact：
+            #     历史调查事实
+            #
+            # Execution Artifact：
+            #     前序任务已经真实修改了什么
+            #
+            # code_context：
+            #     当前代码现在到底长什么样
+            #
+            # Change Surface Resolver 必须
+            # 同时看到三者，才能判断：
+            #
+            # “这个 Task 现在还需不需要改？”
+            # ==================================
+            "code_context": [
+                {
+                    "relative_path": (item.relative_path),
+                    "content": (item.content),
+                }
+                for item in bundle.code_context
+            ],
             "retrieved_files": [
                 {
-                    "relative_path": item.relative_path,
-                    "category": item.category,
-                    "context_role": item.context_role,
+                    "relative_path": (item.relative_path),
+                    "category": (item.category),
+                    "context_role": (item.context_role),
                     "matched_intents": list(item.matched_intents),
-                    "target_match_type": item.target_match_type,
-                    "target_match_value": item.target_match_value,
-                    "rerank_rank": item.rerank_rank,
-                    "rerank_score": item.rerank_score,
+                    "target_match_type": (item.target_match_type),
+                    "target_match_value": (item.target_match_value),
+                    "rerank_rank": (item.rerank_rank),
+                    "rerank_score": (item.rerank_score),
                     "reasons": list(item.reasons),
                 }
                 for item in selection.selected_files
@@ -260,6 +287,62 @@ class ChangeSurfaceResolver:
     对上游状态存在时间上的冲突，
     Execution Artifact 表示更晚的已完成状态，
     应优先用于判断上游 Task 是否已经执行。
+27. code_context 表示当前 Repository Revision 中真实存在的源码内容。
+
+    判断“当前 Task 现在是否仍然需要修改”时，
+    必须优先检查 code_context。
+
+    Planner、InvestigationArtifact 描述的是更早阶段的分析，
+    不能因为原始计划说需要修改，
+    就忽略当前代码已经发生变化的事实。
+
+28. InvestigationArtifact 的 candidate_target
+    仍然负责控制“哪些生产文件有资格被修改”。
+
+    但 candidate_target 只代表：
+
+        这个文件允许成为修改目标
+
+    不代表：
+
+        当前 Revision 中它仍然必须修改。
+
+29. upstream_executions 与 code_context
+    应结合使用：
+
+    upstream_executions 证明前序 Task
+    已经真实修改并验证了哪些文件；
+
+    code_context 用于确认这些修改之后，
+    当前代码是否已经满足当前 Task。
+
+30. 如果：
+
+    - upstream_executions 表明前序 Task 已修改相关文件；
+    - 并且当前 code_context 已经证明
+      当前 Task 的目标得到满足；
+
+    则允许返回：
+
+        implementation_targets = []
+        tests = []
+        unresolved = []
+        execution_disposition = "no_change_required"
+
+    不要因为 Initial Task Plan 原本是 code_change，
+    就强行寻找新的修改目标。
+
+31. 如果当前 code_context 与旧的
+    InvestigationArtifact 对“代码当前状态”的描述冲突：
+
+    - 当前代码状态以 code_context 为准；
+    - 修改资格仍然受 Investigation
+      candidate_target 边界约束。
+
+    也就是说：
+
+        Current Code 决定“还需不需要改”
+        Investigation 决定“允许改谁”
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """.strip()

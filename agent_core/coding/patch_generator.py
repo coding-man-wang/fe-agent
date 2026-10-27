@@ -290,6 +290,42 @@ class PatchGenerator:
 
         target_map = {target.relative_path: target for target in plan.targets}
 
+        unchanged_paths = sorted(
+            change.relative_path
+            for change in generated.changes
+            if (change.after_content == source_files[change.relative_path])
+        )
+
+        # ==================================
+        # Late No-op
+        #
+        # 所有目标最终都没有实际变化：
+        #
+        # 说明 Patch Generation 在真正产生
+        # Side Effect 前确认当前代码已经满足目标。
+        #
+        # 这种情况不是普通 Patch Error。
+        # ==================================
+
+        if unchanged_paths and len(unchanged_paths) == len(generated.changes):
+            raise PatchGenerationNoop(paths=unchanged_paths)
+
+        # ==================================
+        # Partial No-op
+        #
+        # 如果计划修改多个文件，
+        # 但只有一部分没有产生修改，
+        # 说明 Analysis / PatchPlan /
+        # Generation 之间仍然存在不一致。
+        #
+        # 这时继续当作真正的错误。
+        # ==================================
+
+        if unchanged_paths:
+            raise PatchGenerationError(
+                "部分 Patch Target " "没有产生实际修改: " + ", ".join(unchanged_paths)
+            )
+
         validated_patches: list[ValidatedFilePatch] = []
 
         for change in generated.changes:
@@ -299,11 +335,6 @@ class PatchGenerator:
             before_content = source_files[change.relative_path]
 
             after_content = change.after_content
-
-            if after_content == before_content:
-                raise PatchGenerationError(
-                    "模型没有产生实际修改: " f"{change.relative_path}"
-                )
 
             after_bytes = after_content.encode("utf-8")
 
@@ -349,4 +380,26 @@ class PatchGenerator:
             artifact_id=plan.artifact_id,
             context_hash=plan.context_hash,
             patches=validated_patches,
+        )
+
+
+class PatchGenerationNoop(PatchGenerationError):
+    """
+    Patch 生成阶段确认所有目标文件
+    都不需要产生真实修改。
+
+    这是一个可识别的 no-op 信号，
+    不等同于普通 PatchGenerationError。
+    """
+
+    def __init__(
+        self,
+        *,
+        paths: list[str],
+    ) -> None:
+        self.paths = sorted(set(paths))
+
+        super().__init__(
+            "Patch 生成结果与当前文件完全一致，"
+            "无需实际修改: " + ", ".join(self.paths)
         )

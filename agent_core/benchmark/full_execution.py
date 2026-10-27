@@ -78,7 +78,7 @@ from agent_core.coding.handoff import (
 from agent_core.coding.orchestration_model import (
     TaskAnalysisRecord,
 )
-from agent_core.coding.patch_generator import PatchGenerator
+from agent_core.coding.patch_generator import PatchGenerator, PatchGenerationNoop
 from agent_core.coding.patch_planner import PatchPlanner
 from agent_core.coding.preparation import ExecutionPreparer
 from agent_core.coding.reviewer import PatchReviewer
@@ -512,98 +512,48 @@ class FullExecutionBenchmarkService:
                 #
                 # code_change
                 # test
+                #
+                # 重要：
+                #
+                # task_surfaces 是 Full Execution
+                # 开始前生成的 Prepared / Baseline
+                # 分析结果。
+                #
+                # Repository 在多 Task 执行过程中
+                # 会不断产生新的 Commit，
+                # 因此不能直接使用旧 Surface
+                # 作为当前 Task 的最终执行判断。
+                #
+                # 当前 Task 必须：
+                #
+                # latest commit
+                #     ↓
+                # fresh context
+                #     ↓
+                # fresh change surface
+                #     ↓
+                # side effect decision
                 # ==================================
 
-                surface = task_surfaces.get(task.task_id)
-
-                if surface is None:
-                    raise (
-                        FullExecutionBenchmarkError(
-                            f"{task.task_id} " "缺少 " "ResolvedChangeSurface"
-                        )
+                # 目前仍保留 task_surfaces 参数，
+                # 用来验证 Prepared Input 完整性。
+                #
+                # 但它不再决定：
+                #
+                # - 当前是否需要修改
+                # - 当前修改哪些文件
+                # - 当前是否 evidence insufficient
+                #
+                # 后续可以单独清理这个历史参数。
+                if task.task_id not in task_surfaces:
+                    raise FullExecutionBenchmarkError(
+                        f"{task.task_id} " "缺少 Prepared " "ResolvedChangeSurface"
                     )
-
-                if surface.execution_disposition == "no_change_required":
-                    task_record = FullExecutionTaskRecord(
-                        task_id=(task.task_id),
-                        task_type=(task.task_type),
-                        status=("skipped_no_change"),
-                        execution_disposition=(surface.execution_disposition),
-                        base_commit_sha=(current_sha),
-                    )
-
-                    task_records.append(task_record)
-
-                    record = record.model_copy(
-                        deep=True,
-                        update={"tasks": (task_records)},
-                    )
-
-                    self.store.save(record)
-
-                    continue
-
-                if surface.execution_disposition == "insufficient_evidence":
-                    blocked = FullExecutionTaskRecord(
-                        task_id=(task.task_id),
-                        task_type=(task.task_type),
-                        status="failed",
-                        execution_disposition=(surface.execution_disposition),
-                        base_commit_sha=(current_sha),
-                        error=(
-                            "InsufficientEvidence: "
-                            "Change Surface "
-                            "证据不足，禁止进入 "
-                            "Side Effect Plane"
-                        ),
-                    )
-
-                    task_records.append(blocked)
-
-                    raise (
-                        FullExecutionBenchmarkError(
-                            blocked.error or ("Change Surface " "证据不足")
-                        )
-                    )
-
-                if task.task_type == "code_change":
-                    execution_surface = production_surface_policy.apply(surface)
-
-                elif task.task_type == "test":
-                    execution_surface = test_surface_policy.apply(surface)
-
-                else:
-                    raise (
-                        FullExecutionBenchmarkError(
-                            "不支持的 " "Side Effect Task: " f"{task.task_type}"
-                        )
-                    )
-
-                if not (execution_surface.requires_patch()):
-                    task_record = FullExecutionTaskRecord(
-                        task_id=(task.task_id),
-                        task_type=(task.task_type),
-                        status=("skipped_no_production_change"),
-                        execution_disposition=(surface.execution_disposition),
-                        base_commit_sha=(current_sha),
-                    )
-
-                    task_records.append(task_record)
-
-                    record = record.model_copy(
-                        deep=True,
-                        update={"tasks": (task_records)},
-                    )
-
-                    self.store.save(record)
-
-                    continue
 
                 task_record = FullExecutionTaskRecord(
                     task_id=(task.task_id),
                     task_type=(task.task_type),
                     status="failed",
-                    execution_disposition=(surface.execution_disposition),
                     base_commit_sha=(current_sha),
                 )
 
@@ -612,6 +562,9 @@ class FullExecutionBenchmarkService:
                 try:
                     # ==================================
                     # Snapshot
+                    #
+                    # 当前 Task 必须基于最新成功
+                    # Commit 创建只读分析快照。
                     # ==================================
 
                     analysis_root = await snapshot_manager.create(
@@ -622,7 +575,7 @@ class FullExecutionBenchmarkService:
                     # ==================================
                     # Current Revision Context
                     #
-                    # 每个 Task 基于最新 Commit
+                    # 每个 Task 都基于当前最新 Commit
                     # 重新计算：
                     #
                     # 1. File Index
@@ -630,6 +583,9 @@ class FullExecutionBenchmarkService:
                     # 3. Semantic Index
                     # 4. Dependency Graph
                     # 5. Final Selection
+                    #
+                    # 不能复用上一个 Repository
+                    # Revision 的 Context。
                     # ==================================
 
                     context_selection = await self.context_selection_service.select(
@@ -657,7 +613,7 @@ class FullExecutionBenchmarkService:
                     graph_added_paths = [
                         path
                         for path in selected_paths
-                        if (path not in (retrieval_path_set))
+                        if (path not in retrieval_path_set)
                     ]
 
                     task_record = task_record.model_copy(
@@ -685,28 +641,204 @@ class FullExecutionBenchmarkService:
                         update={"root_path": (str(analysis_root))},
                     )
 
+                    # ==================================
+                    # Base Current Context
+                    #
+                    # 这里先建立一份完全基于
+                    # current_sha 的 Context。
+                    #
+                    # 注意：
+                    #
+                    # 此时还没有决定当前 Task
+                    # 最终允许修改哪些文件。
+                    # ==================================
+
+                    base_bundle = self._base_bundle_for_task(
+                        task=task,
+                        requirement=(requirement),
+                        technical_spec=(technical_spec),
+                        repository=(current_repository),
+                        current_root=(analysis_root),
+                        selection=(selection),
+                        engineering_rules=(engineering_rules),
+                    )
+
+                    # ==================================
+                    # Fresh Change Surface
+                    #
+                    # 关键修复：
+                    #
+                    # 不再使用 Full Execution
+                    # 开始前计算的旧 Surface。
+                    #
+                    # 当前 Task 必须结合：
+                    #
+                    # - 当前 Repository Revision
+                    # - 当前 Retrieval
+                    # - 当前代码 Context
+                    # - 上游 Investigation
+                    # - 本次 Run 已完成的
+                    #   Execution Artifacts
+                    #
+                    # 重新判断：
+                    #
+                    # 当前还需要修改什么？
+                    # ==================================
+
+                    surface = await run_coordinator.resolve_change_surface(
+                        bundle=(base_bundle),
+                        selection=(selection),
+                        task_plan=(task_plan),
+                    )
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "execution_disposition": (surface.execution_disposition),
+                        },
+                    )
+
+                    # ==================================
+                    # Fresh No-op
+                    #
+                    # 原计划可能要求修改，
+                    # 但前序 Task 已经完成了工作。
+                    #
+                    # 当前最新代码确认无需继续修改，
+                    # 当前 Task 动态变成 no-op。
+                    # ==================================
+
+                    if surface.execution_disposition == "no_change_required":
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "status": ("skipped_no_change"),
+                                "error": None,
+                            },
+                        )
+
+                        task_records.append(task_record)
+
+                        record = record.model_copy(
+                            deep=True,
+                            update={"tasks": (task_records)},
+                        )
+
+                        self.store.save(record)
+
+                        continue
+
+                    # ==================================
+                    # Fresh Insufficient Evidence
+                    #
+                    # 只有真正查看过当前最新
+                    # Repository State 后，
+                    # 仍然无法确定安全修改范围，
+                    # 才允许阻断。
+                    # ==================================
+
+                    if surface.execution_disposition == "insufficient_evidence":
+                        unresolved_detail = (
+                            " | ".join(surface.unresolved)
+                            if surface.unresolved
+                            else ("未提供具体 " "unresolved detail")
+                        )
+
+                        raise (
+                            FullExecutionBenchmarkError(
+                                "InsufficientEvidence: "
+                                "基于当前最新 "
+                                "Repository State "
+                                "仍无法确定安全修改范围: " + unresolved_detail
+                            )
+                        )
+
+                    # ==================================
+                    # Task-type Write Boundary
+                    #
+                    # Change Surface：
+                    #     当前哪些文件相关 /
+                    #     哪些文件可能需要修改
+                    #
+                    # Execution Surface：
+                    #     当前生命周期阶段
+                    #     真正允许写哪些文件
+                    #
+                    # code_change:
+                    #     production writable
+                    #
+                    # test:
+                    #     tests writable
+                    # ==================================
+
+                    if task.task_type == "code_change":
+                        execution_surface = production_surface_policy.apply(surface)
+
+                    elif task.task_type == "test":
+                        execution_surface = test_surface_policy.apply(surface)
+
+                    else:
+                        raise (
+                            FullExecutionBenchmarkError(
+                                "不支持的 " "Side Effect Task: " f"{task.task_type}"
+                            )
+                        )
+
+                    # ==================================
+                    # Current Surface 无可写目标
+                    #
+                    # 例如：
+                    #
+                    # Impact / Dependency 很多，
+                    # 但当前生命周期阶段
+                    # 没有真正允许修改的文件。
+                    # ==================================
+
+                    if not (execution_surface.requires_patch()):
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "status": ("skipped_no_production_change"),
+                                "error": None,
+                            },
+                        )
+
+                        task_records.append(task_record)
+
+                        record = record.model_copy(
+                            deep=True,
+                            update={"tasks": (task_records)},
+                        )
+
+                        self.store.save(record)
+
+                        continue
+
+                    # ==================================
+                    # Final Resolved Context
+                    #
+                    # 使用刚刚重新计算出来的
+                    # Fresh Surface，
+                    # 构造真正交给 Coding Agent
+                    # 的代码上下文。
+                    # ==================================
+
                     bundle = run_coordinator.build_resolved_context(
                         repository_root=(analysis_root),
                         requirement=(requirement),
                         technical_spec=(technical_spec),
                         repository=(current_repository),
                         index=(current_index),
-                        bundle=(
-                            self._base_bundle_for_task(
-                                task=task,
-                                requirement=(requirement),
-                                technical_spec=(technical_spec),
-                                repository=(current_repository),
-                                current_root=(analysis_root),
-                                selection=(selection),
-                                engineering_rules=(engineering_rules),
-                            )
-                        ),
-                        selection=selection,
+                        bundle=(base_bundle),
+                        selection=(selection),
                         surface=(execution_surface),
                         engineering_rules=(engineering_rules),
                         task_plan=(task_plan),
                     )
+
+                    # ==================================
+                    # Coding Analysis
+                    # ==================================
 
                     # ==================================
                     # Coding Analysis
@@ -873,14 +1005,72 @@ class FullExecutionBenchmarkService:
                         bundle=bundle,
                     )
 
-                    proposal = await PatchGenerator(
-                        repository_root=(analysis_root),
-                        model=text_model,
-                    ).generate(
-                        artifact=(artifact),
-                        plan=(patch_plan),
-                        preparation=(preparation),
-                    )
+                    try:
+                        proposal = await PatchGenerator(
+                            repository_root=(analysis_root),
+                            model=(text_model),
+                        ).generate(
+                            artifact=(artifact),
+                            plan=(patch_plan),
+                            preparation=(preparation),
+                        )
+
+                    except PatchGenerationNoop as noop:
+                        # ==================================
+                        # Late No-op Reconciliation
+                        #
+                        # Coding Analysis / PatchPlan
+                        # 认为可能需要修改，
+                        #
+                        # 但 Patch Generation 在读取
+                        # 当前真实文件后确认：
+                        #
+                        # 所有 Target 的最终内容
+                        # 与当前内容完全一致。
+                        #
+                        # 此时：
+                        #
+                        # - 没有产生 Side Effect
+                        # - 不创建 Workspace
+                        # - 不产生 Commit
+                        # - 不把它当成系统失败
+                        #
+                        # 对 test Task：
+                        # 仍然保留对应测试类型，
+                        # 让 Final Verification 执行。
+                        # ==================================
+
+                        noop_verification = None
+
+                        if task.task_type == "test":
+                            noop_verification = (
+                                impact_verification_planner.build_for_test_files(
+                                    base_command_ids=list(
+                                        case.expectation.verification_command_ids
+                                    ),
+                                    test_files=list(noop.paths),
+                                )
+                            )
+
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "status": ("skipped_runtime_noop"),
+                                "planned_verification": (noop_verification),
+                                "error": None,
+                            },
+                        )
+
+                        task_records.append(task_record)
+
+                        record = record.model_copy(
+                            deep=True,
+                            update={"tasks": (task_records)},
+                        )
+
+                        self.store.save(record)
+
+                        continue
 
                     proposal_decision = run_coordinator.guard_patch_proposal(
                         proposal=(proposal),

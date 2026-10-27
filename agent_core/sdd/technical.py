@@ -1,5 +1,7 @@
 import json
 
+from pydantic import ValidationError
+
 from agent_core.llm.base import LLM
 from agent_core.llm.model import (
     ChatRequest,
@@ -17,8 +19,14 @@ class TechnicalSpecGenerator:
     def __init__(
         self,
         llm: LLM,
+        *,
+        max_validation_retries: int = 1,
     ):
+        if max_validation_retries < 0:
+            raise ValueError("max_validation_retries 不能小于 0")
+
         self.llm = llm
+        self.max_validation_retries = max_validation_retries
 
     async def generate(
         self,
@@ -80,14 +88,26 @@ class TechnicalSpecGenerator:
 
 15. 只返回 JSON，不返回 Markdown。
 
+16. 返回的内容必须是严格合法的 JSON。
+    特别注意：
+    - JSON 字符串内部的双引号必须正确转义；
+    - 数组元素之间必须有逗号；
+    - 对象字段之间必须有逗号；
+    - 所有 [] 和 {{}} 必须正确闭合；
+    - 不允许 JavaScript / Python 风格注释；
+    - 不允许 trailing comma。
+
 输出必须符合以下 JSON Schema：
 
-{json.dumps(schema, ensure_ascii=False)}
-"""
+{json.dumps(
+    schema,
+    ensure_ascii=False,
+)}
+""".strip()
 
         input_data = {
-            "requirement": (requirement.model_dump()),
-            "project_context": (project_context.model_dump()),
+            "requirement": (requirement.model_dump(mode="json")),
+            "project_context": (project_context.model_dump(mode="json")),
         }
 
         request = ChatRequest(
@@ -109,4 +129,231 @@ class TechnicalSpecGenerator:
 
         response = await self.llm.chat(request)
 
-        return TechnicalSpec.model_validate_json(response.content)
+        raw_output = response.content
+
+        last_error: ValidationError | None = None
+
+        # ==================================
+        # Structured Output Boundary
+        #
+        # 第一次：
+        #   正常解析
+        #
+        # 如果失败：
+        #   把真实 Validation Error
+        #   返回给模型做有限修复。
+        #
+        # max_validation_retries=1 表示：
+        #
+        #   1 次正常生成
+        #   +
+        #   最多 1 次修复
+        # ==================================
+
+        for attempt in range(self.max_validation_retries + 1):
+            try:
+                return self._parse_spec(raw_output)
+
+            except ValidationError as exc:
+                last_error = exc
+
+                if attempt >= self.max_validation_retries:
+                    break
+
+                raw_output = await self._repair_output(
+                    raw_output=(raw_output),
+                    error=exc,
+                    schema=schema,
+                )
+
+        # ==================================
+        # Repair 之后仍不合法
+        #
+        # 不降级、不猜测、不吞掉错误。
+        # ==================================
+
+        assert last_error is not None
+
+        raise last_error
+
+    @classmethod
+    def _parse_spec(
+        cls,
+        raw_output: str,
+    ) -> TechnicalSpec:
+        """
+        对 LLM 输出建立严格的
+        Structured Output Boundary。
+
+        这里只做非常轻量的外层清理：
+
+        - 去掉首尾空白
+        - 去掉 Markdown code fence
+        - 截取最外层 JSON object
+
+        不主动修复 JSON 内容。
+        真正修复交给 bounded repair。
+        """
+
+        json_text = cls._extract_json_text(raw_output)
+
+        return TechnicalSpec.model_validate_json(json_text)
+
+    @staticmethod
+    def _extract_json_text(
+        raw_output: str,
+    ) -> str:
+        text = (raw_output or "").strip()
+
+        if not text:
+            # 为了统一进入
+            # Pydantic ValidationError，
+            # 给一个必然非法的 JSON。
+            text = ""
+
+        # ==================================
+        # 容忍模型偶尔返回：
+        #
+        # ```json
+        # {...}
+        # ```
+        #
+        # 这里只去掉包装，
+        # 不修改 JSON 本身。
+        # ==================================
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+
+            if lines:
+                lines = lines[1:]
+
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+
+            text = "\n".join(lines).strip()
+
+        # ==================================
+        # 有时模型会输出：
+        #
+        # Here is the result:
+        # {...}
+        #
+        # Prompt 已禁止这种行为，
+        # 这里仍做有限容错。
+        # ==================================
+
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start != -1 and end != -1 and end >= start:
+            text = text[start : end + 1]
+
+        return text
+
+    async def _repair_output(
+        self,
+        *,
+        raw_output: str,
+        error: ValidationError,
+        schema: dict,
+    ) -> str:
+        """
+        只修复 Structured Output。
+
+        不是重新做技术方案，
+        也不允许扩大需求范围。
+        """
+
+        repair_request = ChatRequest(
+            messages=[
+                Message(
+                    role="system",
+                    content=f"""
+你正在修复一个 TechnicalSpec JSON。
+
+上一份输出没有通过程序的严格校验。
+
+你的任务只是修复 JSON 语法或 Schema 契约问题，
+不要重新设计技术方案，
+不要扩大需求范围，
+不要添加上一份输出中不存在的新功能。
+
+必须遵守：
+
+1. 只返回一个合法 JSON object。
+2. 不要返回 Markdown。
+3. 不要返回 ```json code fence。
+4. 不要解释修改过程。
+5. 不要添加 JSON Schema 之外的字段。
+6. 字段类型必须严格符合 Schema。
+7. 数组和对象必须使用合法 JSON 语法。
+8. JSON 字符串内部的双引号必须正确转义。
+9. 尽可能保留上一份输出的原始语义。
+10. 如果只是 JSON 格式错误，只修格式，不改变内容。
+
+JSON Schema：
+
+{json.dumps(
+    schema,
+    ensure_ascii=False,
+)}
+""".strip(),
+                ),
+                Message(
+                    role="user",
+                    content=json.dumps(
+                        {
+                            "validation_error": (self._format_validation_error(error)),
+                            "previous_output": (raw_output),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                ),
+            ]
+        )
+
+        response = await self.llm.chat(repair_request)
+
+        return response.content
+
+    @staticmethod
+    def _format_validation_error(
+        error: ValidationError,
+    ) -> str:
+        """
+        给 Repair LLM 一个紧凑但明确的
+        Validation Error。
+
+        不需要把完整 traceback
+        塞回上下文。
+        """
+
+        details: list[str] = []
+
+        for item in error.errors(include_url=False):
+            location = ".".join(
+                str(part)
+                for part in item.get(
+                    "loc",
+                    (),
+                )
+            )
+
+            message = item.get(
+                "msg",
+                "validation error",
+            )
+
+            error_type = item.get(
+                "type",
+                "unknown",
+            )
+
+            if location:
+                details.append(f"{location}: " f"{message} " f"({error_type})")
+            else:
+                details.append(f"{message} " f"({error_type})")
+
+        return "\n".join(details)
