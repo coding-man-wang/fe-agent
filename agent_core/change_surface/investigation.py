@@ -113,6 +113,64 @@ class InvestigationArtifactBuilder:
     6. 对相邻 UI 组件仍保持保守：
        只有其自身 contract / behavior 必须变化时才是 candidate_target。
        仅仅因为 UI 位于该组件附近，不足以成为 candidate_target。
+    7.1 必须区分“Domain Contract Change”
+    和“Existing Contract Consumption”。
+
+    Domain Contract Change：
+    Requirement 改变了某个领域模型本身的
+    字段、允许值、语义、不变量或状态转换规则。
+
+    例如：
+        原状态 union 不包含 refunded，
+        Requirement 要新增 refunded。
+
+    这种情况下，
+    对应 domain/type owner 可以是 candidate_target。
+
+    7.2 Existing Contract Consumption：
+        Requirement 只是让新的 UI、查询、筛选、
+        API 或业务流程使用一个已经存在且足够表达需求的
+        字段或类型。
+    
+        如果当前 domain/type 已经完整覆盖
+        Requirement 所需的所有值和语义，
+        不要仅因为新功能会引用该类型，
+        就把它标记为 candidate_target。
+    
+        这种文件应优先标记为 dependency。
+    
+    7.3 不得仅为了以下原因把现有 domain/type 文件
+        标成 candidate_target：
+    
+        - 提取一个新的 type alias；
+        - 为减少重复字符串创建类型；
+        - 为代码更“整洁”增加 Query interface；
+        - 为未来扩展提前抽象；
+        - 当前实现“不够优雅”；
+        - 多个文件都可能引用相同 literal。
+    
+        除非 Requirement、Engineering Rules、
+        现有架构约定或当前代码契约明确证明
+        该抽象是完成需求所必需的。
+    
+    7.4 candidate_target 必须回答：
+    
+        “如果这个文件保持当前内容完全不变，
+         Requirement 是否仍然可以在维持现有职责边界的前提下
+         正确完成？”
+    
+        如果答案是“可以”，
+        则该文件原则上不应成为 candidate_target。
+    
+    7.5 Responsibility Ownership 规则不能被扩大解释为：
+    
+        “只要某个文件定义了需求中出现的数据类型，
+         它就是修改目标”。
+    
+        Ownership 只有在该 owner 自身维护的
+        contract / state / invariant / behavior
+        因 Requirement 发生变化时，
+        才形成修改义务。
 8. target_match_type、relevance_reasons、rerank rank、
    directory match、Graph relation 都只能帮助定位代码，
    不能作为 candidate_target 的直接证据。

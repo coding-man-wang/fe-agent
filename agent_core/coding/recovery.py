@@ -12,6 +12,7 @@ from agent_core.coding.execution_journal_model import (
 )
 from agent_core.coding.patch_generation_model import (
     FilePatchProposal,
+    ValidatedFilePatch,
 )
 from agent_core.coding.recovery_model import (
     FileRecoveryAssessment,
@@ -159,6 +160,11 @@ class RecoveryInspector:
 
             patch = patch_map[record.relative_path]
 
+            if record.action != patch.action:
+                raise RecoveryError(
+                    "Journal Action " "与 Proposal 不一致: " f"{record.relative_path}"
+                )
+
             if record.expected_sha256 != patch.expected_sha256:
                 raise RecoveryError(
                     "Journal Before Hash "
@@ -173,30 +179,46 @@ class RecoveryInspector:
                     f"{record.relative_path}"
                 )
 
-            path = self._resolve_target(record.relative_path)
+            path = self._resolve_path(
+                record.relative_path,
+                allow_missing=True,
+            )
 
-            try:
-                current_bytes = path.read_bytes()
+            if not path.exists():
 
-            except OSError as exc:
-                raise RecoveryError(
-                    "无法读取恢复目标: " f"{record.relative_path}"
-                ) from exc
+                current_state = "absent"
 
-            current_hash = self._sha256(current_bytes)
-
-            if current_hash == patch.expected_sha256:
-                current_state = "before"
-
-            elif current_hash == patch.after_sha256:
-                current_state = "after"
+                current_hash = None
 
             else:
-                current_state = "diverged"
+
+                try:
+                    current_bytes = path.read_bytes()
+
+                except OSError as exc:
+                    raise RecoveryError(
+                        "无法读取恢复目标: " f"{record.relative_path}"
+                    ) from exc
+
+                current_hash = self._sha256(current_bytes)
+
+                if current_hash == patch.after_sha256:
+                    current_state = "after"
+
+                elif (
+                    patch.action == "modify"
+                    and patch.expected_sha256 is not None
+                    and current_hash == patch.expected_sha256
+                ):
+                    current_state = "before"
+
+                else:
+                    current_state = "diverged"
 
             assessments.append(
                 FileRecoveryAssessment(
                     relative_path=(record.relative_path),
+                    action=(patch.action),
                     journal_status=(record.status),
                     current_state=(current_state),
                     current_sha256=(current_hash),
@@ -223,6 +245,16 @@ class RecoveryInspector:
             files=assessments,
             reason=reason,
         )
+
+    @staticmethod
+    def _expected_before_state(
+        item: FileRecoveryAssessment,
+    ) -> str:
+
+        if item.action == "create":
+            return "absent"
+
+        return "before"
 
     def _decide(
         self,
@@ -290,7 +322,10 @@ class RecoveryInspector:
 
             consistent = all(
                 (item.journal_status == "applied" and item.current_state == "after")
-                or (item.journal_status == "pending" and item.current_state == "before")
+                or (
+                    item.journal_status == "pending"
+                    and item.current_state == self._expected_before_state(item)
+                )
                 for item in files
             )
 
@@ -320,7 +355,8 @@ class RecoveryInspector:
         if journal.status == "staged":
 
             if all(
-                item.journal_status == "pending" and item.current_state == "before"
+                item.journal_status == "pending"
+                and item.current_state == self._expected_before_state(item)
                 for item in files
             ):
                 return (
@@ -347,7 +383,10 @@ class RecoveryInspector:
 
         if journal.status == "failed":
 
-            if all(item.current_state == "before" for item in files):
+            if all(
+                item.current_state == self._expected_before_state(item)
+                for item in files
+            ):
                 return (
                     False,
                     False,
@@ -377,10 +416,13 @@ class RecoveryInspector:
             consistent = all(
                 (
                     item.journal_status == "rolled_back"
-                    and item.current_state == "before"
+                    and item.current_state == self._expected_before_state(item)
                 )
                 or (item.journal_status == "applied" and item.current_state == "after")
-                or (item.journal_status == "pending" and item.current_state == "before")
+                or (
+                    item.journal_status == "pending"
+                    and item.current_state == self._expected_before_state(item)
+                )
                 for item in files
             )
 
@@ -409,7 +451,10 @@ class RecoveryInspector:
 
         if journal.status == "rolled_back":
 
-            if all(item.current_state == "before" for item in files):
+            if all(
+                item.current_state == self._expected_before_state(item)
+                for item in files
+            ):
                 return (
                     False,
                     False,
@@ -444,6 +489,68 @@ class RecoveryInspector:
             True,
             ("当前 Execution Journal 状态" "无法安全自动恢复"),
         )
+
+    def _resolve_path(
+        self,
+        relative_path: str,
+        *,
+        allow_missing: bool,
+    ) -> Path:
+
+        if (
+            not relative_path
+            or "\\" in relative_path
+            or ":" in relative_path
+            or "\x00" in relative_path
+        ):
+            raise RecoveryError(f"非法路径: " f"{relative_path}")
+
+        parts = relative_path.split("/")
+
+        if any(part in {"", ".", ".."} for part in parts):
+            raise RecoveryError("不允许路径穿越或" "非规范路径: " f"{relative_path}")
+
+        relative = PurePosixPath(relative_path)
+
+        if relative.is_absolute():
+            raise RecoveryError("不允许绝对路径")
+
+        current = self.root
+
+        for part in parts[:-1]:
+
+            current = current / part
+
+            if current.is_symlink():
+                raise RecoveryError(
+                    "Recovery " "不允许经过符号链接: " f"{relative_path}"
+                )
+
+        try:
+            parent = current.resolve(strict=True)
+
+        except OSError as exc:
+            raise RecoveryError("恢复目标父目录" "不存在: " f"{relative_path}") from exc
+
+        if not parent.is_relative_to(self.root):
+            raise RecoveryError("恢复目标位于仓库之外")
+
+        target = parent / parts[-1]
+
+        if target.is_symlink():
+            raise RecoveryError("Recovery " "不允许处理符号链接: " f"{relative_path}")
+
+        if target.exists():
+
+            if not target.is_file():
+                raise RecoveryError("恢复目标不是普通文件: " f"{relative_path}")
+
+            return target
+
+        if not allow_missing:
+            raise RecoveryError("恢复目标不存在: " f"{relative_path}")
+
+        return target
 
 
 class SafeRollbackService:
@@ -485,37 +592,71 @@ class SafeRollbackService:
     def _rollback_file(
         self,
         *,
-        relative_path: str,
-        before_content: str,
-        expected_after_sha256: str,
+        patch: ValidatedFilePatch,
     ) -> None:
-        """
-        将单个文件：
 
-        approved after
-            ↓
-        original before
-
-        使用原子替换，并做两次版本校验。
-        """
-
-        path = self.inspector._resolve_target(relative_path)
+        path = self.inspector._resolve_path(
+            patch.relative_path,
+            allow_missing=False,
+        )
 
         try:
             current_bytes = path.read_bytes()
 
         except OSError as exc:
-            raise RecoveryError("无法读取待回滚文件: " f"{relative_path}") from exc
+            raise RecoveryError(
+                "无法读取待回滚文件: " f"{patch.relative_path}"
+            ) from exc
 
-        if self._sha256(current_bytes) != expected_after_sha256:
+        if self._sha256(current_bytes) != patch.after_sha256:
             raise RecoveryError(
                 "文件已经不是 Agent "
                 "写入后的版本，"
                 "禁止自动回滚: "
-                f"{relative_path}"
+                f"{patch.relative_path}"
             )
 
-        before_bytes = before_content.encode("utf-8")
+        # ==================================
+        # CREATE rollback
+        #
+        # Agent 创建的文件：
+        #
+        # after
+        #   ↓
+        # absent
+        #
+        # 只有文件仍然严格等于
+        # Agent after 版本时才允许删除。
+        # ==================================
+
+        if patch.action == "create":
+
+            # 删除前再次校验，
+            # 防止检查和删除之间被外部修改。
+            current_bytes = path.read_bytes()
+
+            if self._sha256(current_bytes) != patch.after_sha256:
+                raise RecoveryError(
+                    "删除 create target 前" "文件发生变化: " f"{patch.relative_path}"
+                )
+
+            path.unlink()
+
+            if path.exists():
+                raise RecoveryError(
+                    "create target " "Rollback 删除失败: " f"{patch.relative_path}"
+                )
+
+            return
+
+        # ==================================
+        # MODIFY rollback
+        # ==================================
+
+        if patch.before_content is None:
+            raise RecoveryError("modify patch " "缺少 before_content")
+
+        before_bytes = patch.before_content.encode("utf-8")
 
         temporary_path: Path | None = None
 
@@ -526,7 +667,7 @@ class SafeRollbackService:
                 mode="wb",
                 dir=path.parent,
                 prefix=(f".{path.name}."),
-                suffix=".rollback.tmp",
+                suffix=(".rollback.tmp"),
                 delete=False,
             ) as temporary_file:
 
@@ -543,18 +684,12 @@ class SafeRollbackService:
                 original_mode,
             )
 
-            # 真正 Replace 前再次检查，
-            # 减小 TOCTOU 时间窗口。
-            try:
-                current_bytes = path.read_bytes()
+            current_bytes = path.read_bytes()
 
-            except OSError as exc:
+            if self._sha256(current_bytes) != patch.after_sha256:
                 raise RecoveryError(
-                    "回滚提交前无法重新读取文件: " f"{relative_path}"
-                ) from exc
-
-            if self._sha256(current_bytes) != expected_after_sha256:
-                raise RecoveryError("回滚提交前文件发生变化: " f"{relative_path}")
+                    "回滚提交前" "文件发生变化: " f"{patch.relative_path}"
+                )
 
             os.replace(
                 temporary_path,
@@ -563,14 +698,13 @@ class SafeRollbackService:
 
             temporary_path = None
 
-            # 回滚后再验证一次。
             restored = path.read_bytes()
 
             expected_before_hash = self._sha256(before_bytes)
 
             if self._sha256(restored) != expected_before_hash:
                 raise RecoveryError(
-                    "Rollback 写入后 Hash 校验失败: " f"{relative_path}"
+                    "Rollback 写入后 " "Hash 校验失败: " f"{patch.relative_path}"
                 )
 
         finally:
@@ -654,11 +788,7 @@ class SafeRollbackService:
 
                 patch = patch_map[item.relative_path]
 
-                self._rollback_file(
-                    relative_path=(item.relative_path),
-                    before_content=(patch.before_content),
-                    expected_after_sha256=(patch.after_sha256),
-                )
+                self._rollback_file(patch=patch)
 
                 # 每产生一次真实恢复副作用，
                 # 立即更新 Journal。

@@ -13,7 +13,13 @@ class PatchScopeGuard:
         plan: PatchPlan,
         surface: ResolvedChangeSurface,
     ) -> ScopeGuardResult:
-        requested = [item.relative_path for item in plan.targets]
+        requested = [
+            (
+                item.relative_path,
+                item.action,
+            )
+            for item in plan.targets
+        ]
         return self._evaluate(
             task_id=plan.task_id,
             requested=requested,
@@ -26,7 +32,13 @@ class PatchScopeGuard:
         proposal: FilePatchProposal,
         surface: ResolvedChangeSurface,
     ) -> ScopeGuardResult:
-        requested = [item.relative_path for item in proposal.patches]
+        requested = [
+            (
+                item.relative_path,
+                item.action,
+            )
+            for item in proposal.patches
+        ]
         return self._evaluate(
             task_id=proposal.task_id,
             requested=requested,
@@ -52,15 +64,44 @@ class PatchScopeGuard:
     def _evaluate(
         *,
         task_id: str,
-        requested: list[str],
+        requested: list[
+            tuple[
+                str,
+                str,
+            ]
+        ],
         surface: ResolvedChangeSurface,
     ) -> ScopeGuardResult:
+
         allowed = surface.allowed_change_files()
-        violations = sorted(set(requested) - allowed)
+
+        create_allowed = set(surface.create_files)
+
+        violations: list[str] = []
+
+        for path, action in requested:
+
+            if path not in allowed:
+                violations.append("ScopeViolation: " f"{path}")
+                continue
+
+            if action == "create":
+                if path not in create_allowed:
+                    violations.append("CreateScopeViolation: " f"{path}")
+
+            elif action == "modify":
+                if path in create_allowed:
+                    violations.append("ModifyCreateTarget" "Violation: " f"{path}")
+
+            else:
+                violations.append("UnknownAction: " f"{path}:{action}")
+
+        requested_paths = [path for path, _ in requested]
+
         return ScopeGuardResult(
             task_id=task_id,
-            allowed=not violations,
-            requested_files=requested,
+            allowed=(not violations),
+            requested_files=(requested_paths),
             allowed_files=sorted(allowed),
-            violations=[f"ScopeViolation: {path}" for path in violations],
+            violations=sorted(set(violations)),
         )

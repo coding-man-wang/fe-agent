@@ -15,6 +15,10 @@ from agent_core.llm.model import ChatRequest, Message
 from agent_core.artifacts.execution_model import (
     TaskExecutionArtifact,
 )
+from agent_core.change_surface.create_target_policy import (
+    CreateTargetPolicy,
+    CreateTargetPolicyError,
+)
 
 
 class ChangeSurfaceResolver:
@@ -73,33 +77,34 @@ class ChangeSurfaceResolver:
         investigation_roles = self._investigation_roles(upstream_investigations)
         candidate_targets = self._candidate_target_paths(upstream_investigations)
 
+        creatable_test_roots: list[str] = []
+
+        if bundle.task.task_type == "test":
+            creatable_test_roots = CreateTargetPolicy.discover_test_roots(
+                bundle.repository.root_path
+            )
+
         payload = {
             "task": (bundle.task.model_dump(mode="json")),
             "requirement": (bundle.requirement.model_dump(mode="json")),
             "technical_spec": (bundle.technical_spec.model_dump(mode="json")),
             # ==================================
-            # Current Revision Code Context
+            # Current Repository Code
             #
-            # 这是当前 Repository Revision
-            # 中真正的源码内容。
+            # Investigation 提供的是：
+            # “之前观察到了什么”
             #
-            # Investigation Artifact：
-            #     历史调查事实
+            # code_context 提供的是：
+            # “当前代码实际是什么”
             #
-            # Execution Artifact：
-            #     前序任务已经真实修改了什么
-            #
-            # code_context：
-            #     当前代码现在到底长什么样
-            #
-            # Change Surface Resolver 必须
-            # 同时看到三者，才能判断：
-            #
-            # “这个 Task 现在还需不需要改？”
+            # candidate_target 只能提供修改资格，
+            # 当前源码决定它是否真的仍需修改。
             # ==================================
             "code_context": [
                 {
                     "relative_path": (item.relative_path),
+                    "category": (item.category),
+                    "language": (item.language),
                     "content": (item.content),
                 }
                 for item in bundle.code_context
@@ -126,6 +131,7 @@ class ChangeSurfaceResolver:
             ],
             "available_paths": sorted(available_paths),
             "runtime_candidate_targets": sorted(candidate_targets),
+            "creatable_test_roots": (creatable_test_roots),
         }
 
         request = ChatRequest(
@@ -166,11 +172,13 @@ class ChangeSurfaceResolver:
 
                 self._validate_surface(
                     surface=surface,
-                    expected_task_id=bundle.task.task_id,
-                    available_paths=available_paths,
-                    task_type=bundle.task.task_type,
-                    candidate_targets=candidate_targets,
-                    category_by_path=category_by_path,
+                    expected_task_id=(bundle.task.task_id),
+                    available_paths=(available_paths),
+                    task_type=(bundle.task.task_type),
+                    candidate_targets=(candidate_targets),
+                    category_by_path=(category_by_path),
+                    repository_root=(bundle.repository.root_path),
+                    creatable_test_roots=(creatable_test_roots),
                 )
 
                 return surface
@@ -343,6 +351,126 @@ class ChangeSurfaceResolver:
 
         Current Code 决定“还需不需要改”
         Investigation 决定“允许改谁”
+32. 必须区分 Domain Contract Change
+    与 Existing Contract Consumption。
+
+    Domain Contract Change 表示：
+    Requirement 改变了一个领域模型自身的契约，
+    例如：
+
+    - 新增或删除字段；
+    - 修改字段允许值；
+    - 修改 enum / union 的成员；
+    - 改变字段语义；
+    - 改变状态转换规则；
+    - 改变由该 domain owner 维护的不变量。
+
+    只有这类情况下，
+    domain/type owner 才因为自身职责发生变化
+    而形成修改义务。
+
+33. Existing Contract Consumption 表示：
+
+    新的 UI、筛选、查询、API 或业务流程
+    开始使用一个已经存在的字段或类型，
+
+    但当前 code_context 已经完整表达
+    Requirement 所需要的值和语义。
+
+    这种情况下，
+    不得仅因为新功能引用该类型，
+    就将对应 domain/type 文件
+    放入 implementation_targets。
+
+    它应该优先作为 dependency。
+
+34. 不得仅为了以下优化把文件加入
+    implementation_targets：
+
+    - 提取新的 type alias；
+    - 新建 Query interface；
+    - 消除少量字符串 literal 重复；
+    - 为未来扩展提前抽象；
+    - 仅为了代码风格统一；
+    - 仅因为“这样更优雅”；
+    - 仅因为多个修改文件都会引用同一个已有类型。
+
+    如果不进行这些重构，
+    当前 Requirement 仍然可以在保持现有职责边界的情况下
+    正确完成，
+    则这些修改不属于 Minimal Necessary Change。
+
+35. 对每个准备加入 implementation_targets 的文件，
+    都必须进行一次反事实检查：
+
+        “如果保持这个文件当前内容完全不变，
+         是否仍然可以在维持现有责任边界、
+         contract 和 invariant 的前提下
+         正确完成当前 Task？”
+
+    如果答案是“可以”，
+    则该文件不应该进入 implementation_targets，
+    应根据用途降级为 dependency 或 reference。
+
+36. Responsibility Ownership 不能被解释为：
+
+        “只要某个文件定义了 Requirement 中出现的数据类型，
+         这个文件就必须修改。”
+
+    Ownership 只有在该文件自身负责维护的：
+
+    - contract
+    - state
+    - behavior
+    - invariant
+
+    因 Requirement 发生实际变化时，
+    才形成修改义务。
+
+    仅仅“使用已有 contract”
+    不构成修改 owner 的理由。
+37. create_files 表示当前 Repository 中
+    尚不存在、但 Harness 允许当前 Task 创建的
+    Prospective Write Target。
+
+38. v1 只有 test Task 可以使用 create_files。
+
+    create_files 中的每个路径：
+
+    - 必须同时存在于 tests；
+    - 当前不能存在于 available_paths；
+    - 必须直接位于 creatable_test_roots 之一；
+    - 不允许创建新的父目录。
+
+39. 如果 test Task 需要新增测试，
+    但当前没有同功能测试文件，
+    不应仅因为“文件当前不存在”
+    就返回 insufficient_evidence。
+
+    如果：
+    - production code context 已足够；
+    - Repository test stack 已知；
+    - creatable_test_roots 非空；
+
+    可以选择创建新的测试文件。
+
+40. 对 test Task：
+
+    如果目标主要是组件、Store、API、
+    Mock 等可独立验证行为，
+    优先考虑 tests/unit/*.test.ts。
+
+    只有 Task 明确要求浏览器交互、
+    页面级流程或 E2E 行为时，
+    才优先选择 tests/e2e/*.spec.ts。
+
+41. create target 没有 code_context.content
+    是正常事实。
+
+    不得为尚不存在的文件虚构源码。
+
+42. 不允许 create production source、
+    config、package、router 或其他测试目录之外的文件。
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """.strip()
@@ -395,6 +523,7 @@ JSON Schema：
         task_type: str,
         available_paths: set[str],
         candidate_targets: set[str],
+        creatable_test_roots: list[str],
     ) -> str:
         repair_request = ChatRequest(
             messages=[
@@ -417,7 +546,28 @@ JSON Schema：
 8. 现有实现已满足 Task 时，允许没有任何 implementation target。
 9. 不要添加 Schema 外字段。
 10. 只返回 JSON，不要 Markdown，不要解释。
+11. runtime_candidate_targets 只代表修改资格，
+    不代表这些文件当前都必须修改。
 
+12. 如果当前文件的 domain contract
+    已经完整支持 Requirement 所需的字段、状态和值，
+    而 Requirement 只是使用这个已有 contract，
+    不要为了提取 type alias、Query type
+    或减少 literal 重复而把该文件加入
+    implementation_targets。
+
+13. 修复过程中不得扩大原有修改范围。
+    如果某个文件保持不变仍然可以正确完成当前 Task，
+    应从 implementation_targets 移除，
+    并按用途放入 dependencies 或 references。
+14. test Task 可以使用 create_files，
+    但只能选择 creatable_test_roots
+    下当前不存在的测试文件。
+
+15. create_files 中的路径必须同时放入 tests。
+
+16. 不允许为了修复 JSON
+    创建生产代码路径。
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """.strip(),
@@ -430,6 +580,7 @@ JSON Schema：
                             "available_paths": sorted(available_paths),
                             "runtime_candidate_targets": sorted(candidate_targets),
                             "previous_output": raw_output,
+                            "creatable_test_roots": (creatable_test_roots),
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -623,7 +774,12 @@ JSON Schema：
         available_paths: set[str],
         task_type: str,
         candidate_targets: set[str],
-        category_by_path: dict[str, str],
+        category_by_path: dict[
+            str,
+            str,
+        ],
+        repository_root: str,
+        creatable_test_roots: list[str],
     ) -> None:
         if surface.task_id != expected_task_id:
             raise ChangeSurfaceResolutionError(
@@ -631,17 +787,59 @@ JSON Schema：
                 f"actual={surface.task_id}"
             )
 
-        used = {
+        create_paths = set(surface.create_files)
+
+        # create target 当前天然
+        # 不应该属于 available_paths。
+        existing_used = {
             *surface.implementation_targets,
             *surface.dependencies,
             *surface.references,
             *surface.tests,
-        }
-        invalid = sorted(used - available_paths)
+        } - create_paths
+
+        invalid = sorted(existing_used - available_paths)
+
         if invalid:
-            raise ChangeSurfaceResolutionError(
-                "ResolvedChangeSurface 引用了未知文件: " + ", ".join(invalid)
+            raise (
+                ChangeSurfaceResolutionError(
+                    "ResolvedChangeSurface " "引用了未知已有文件: " + ", ".join(invalid)
+                )
             )
+
+        # ==================================
+        # Prospective Create Boundary
+        # ==================================
+
+        if surface.create_files and task_type != "test":
+            raise (
+                ChangeSurfaceResolutionError("v1 只有 test Task " "允许 create_files")
+            )
+
+        for path in surface.create_files:
+
+            if path in available_paths:
+                raise (
+                    ChangeSurfaceResolutionError(
+                        "create target " "已经存在于 " "Repository State: " f"{path}"
+                    )
+                )
+
+            try:
+                (
+                    CreateTargetPolicy.validate_test_create_path(
+                        repository_root=(repository_root),
+                        relative_path=path,
+                        allowed_roots=(creatable_test_roots),
+                    )
+                )
+
+            except CreateTargetPolicyError as exc:
+                raise (
+                    ChangeSurfaceResolutionError(
+                        "非法 create target: " f"{path}; {exc}"
+                    )
+                ) from exc
 
         if task_type == "test" and surface.implementation_targets:
             raise ChangeSurfaceResolutionError(

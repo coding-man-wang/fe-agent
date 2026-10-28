@@ -30,7 +30,7 @@ class StagedFile:
 
     temporary_path: Path
 
-    before_bytes: bytes
+    before_bytes: bytes | None
 
 
 class BatchPatchApplyService:
@@ -99,6 +99,54 @@ class BatchPatchApplyService:
 
         return resolved
 
+    def _resolve_create_target(
+        self,
+        relative_path: str,
+    ) -> Path:
+
+        if (
+            not relative_path
+            or "\\" in relative_path
+            or ":" in relative_path
+            or "\x00" in relative_path
+        ):
+            raise BatchPatchApplyError(f"非法路径: " f"{relative_path}")
+
+        parts = relative_path.split("/")
+
+        if any(part in {"", ".", ".."} for part in parts):
+            raise BatchPatchApplyError("不允许路径穿越")
+
+        relative = PurePosixPath(relative_path)
+
+        if relative.is_absolute():
+            raise BatchPatchApplyError("不允许绝对路径")
+
+        current = self.root
+
+        for part in parts[:-1]:
+
+            current = current / part
+
+            if current.is_symlink():
+                raise BatchPatchApplyError("create target " "不允许经过 symlink")
+
+        try:
+            parent = current.resolve(strict=True)
+
+        except OSError as exc:
+            raise BatchPatchApplyError("create target " "父目录不存在") from exc
+
+        if not parent.is_relative_to(self.root):
+            raise BatchPatchApplyError("create target " "位于仓库之外")
+
+        target = parent / parts[-1]
+
+        if target.exists() or target.is_symlink():
+            raise BatchPatchApplyError("create target " "已经存在: " f"{relative_path}")
+
+        return target
+
     @staticmethod
     def _sha256(
         data: bytes,
@@ -111,32 +159,53 @@ class BatchPatchApplyService:
         patch: ValidatedFilePatch,
     ) -> StagedFile:
 
-        target = self._resolve_target(patch.relative_path)
+        before_bytes: bytes | None
 
-        before_bytes = target.read_bytes()
+        if patch.action == "modify":
 
-        actual_hash = self._sha256(before_bytes)
+            target = self._resolve_target(patch.relative_path)
 
-        if actual_hash != (patch.expected_sha256):
-            raise BatchPatchApplyError("文件版本已变化: " f"{patch.relative_path}")
+            before_bytes = target.read_bytes()
 
-        if before_bytes != (patch.before_content.encode("utf-8")):
-            raise BatchPatchApplyError(
-                "文件内容与 Proposal 不一致: " f"{patch.relative_path}"
-            )
+            if patch.expected_sha256 is None:
+                raise BatchPatchApplyError("modify patch " "缺少 expected hash")
+
+            actual_hash = self._sha256(before_bytes)
+
+            if actual_hash != patch.expected_sha256:
+                raise BatchPatchApplyError("文件版本已变化: " f"{patch.relative_path}")
+
+            if (
+                patch.before_content is None
+                or before_bytes != patch.before_content.encode("utf-8")
+            ):
+                raise BatchPatchApplyError(
+                    "文件内容与 Proposal " "不一致: " f"{patch.relative_path}"
+                )
+
+            original_mode = stat.S_IMODE(target.stat().st_mode)
+
+        elif patch.action == "create":
+
+            target = self._resolve_create_target(patch.relative_path)
+
+            before_bytes = None
+
+            original_mode = 0o644
+
+        else:
+            raise BatchPatchApplyError("未知 Patch Action")
 
         after_bytes = patch.after_content.encode("utf-8")
 
         if self._sha256(after_bytes) != patch.after_sha256:
             raise BatchPatchApplyError("After Hash 不一致: " f"{patch.relative_path}")
 
-        original_mode = stat.S_IMODE(target.stat().st_mode)
-
         with tempfile.NamedTemporaryFile(
             mode="wb",
             dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".fe-agent.stage",
+            prefix=(f".{target.name}."),
+            suffix=(".fe-agent.stage"),
             delete=False,
         ) as temporary_file:
 
@@ -156,8 +225,8 @@ class BatchPatchApplyService:
         return StagedFile(
             patch=patch,
             target_path=target,
-            temporary_path=temporary_path,
-            before_bytes=before_bytes,
+            temporary_path=(temporary_path),
+            before_bytes=(before_bytes),
         )
 
     def _stage_all(
@@ -221,6 +290,7 @@ class BatchPatchApplyService:
             files=[
                 FileExecutionRecord(
                     relative_path=(patch.relative_path),
+                    action=(patch.action),
                     expected_sha256=(patch.expected_sha256),
                     after_sha256=(patch.after_sha256),
                 )
@@ -239,24 +309,72 @@ class BatchPatchApplyService:
 
         patch = staged.patch
 
-        # Commit 前再次读取正式文件。
-        current = staged.target_path.read_bytes()
+        if patch.action == "modify":
 
-        if current != (staged.before_bytes):
-            raise BatchPatchApplyError(
-                "Commit 前文件发生变化: " f"{patch.relative_path}"
+            if staged.before_bytes is None:
+                raise BatchPatchApplyError("modify staged file " "缺少 before bytes")
+
+            current = staged.target_path.read_bytes()
+
+            if current != staged.before_bytes:
+                raise BatchPatchApplyError(
+                    "Commit 前文件" "发生变化: " f"{patch.relative_path}"
+                )
+
+            os.replace(
+                staged.temporary_path,
+                staged.target_path,
             )
 
-        os.replace(
-            staged.temporary_path,
-            staged.target_path,
-        )
+        elif patch.action == "create":
+
+            # ==================================
+            # Atomic Create
+            #
+            # temp 已经完整写入 + fsync。
+            #
+            # 使用 hard link：
+            #
+            # - target 不存在 → 原子创建
+            # - target 已存在 → 失败
+            #
+            # 不使用 os.replace，
+            # 因为 replace 会覆盖竞争期间
+            # 刚刚被其他人创建的文件。
+            # ==================================
+
+            if staged.target_path.exists() or staged.target_path.is_symlink():
+                raise BatchPatchApplyError(
+                    "Commit 前 " "create target " "已经出现: " f"{patch.relative_path}"
+                )
+
+            try:
+                os.link(
+                    staged.temporary_path,
+                    staged.target_path,
+                )
+
+            except FileExistsError as exc:
+                raise BatchPatchApplyError(
+                    "create target " "发生并发创建冲突: " f"{patch.relative_path}"
+                ) from exc
+
+            except OSError as exc:
+                raise BatchPatchApplyError(
+                    "无法原子创建文件: " f"{patch.relative_path}"
+                ) from exc
+
+            # target 已经指向完整内容。
+            staged.temporary_path.unlink()
+
+        else:
+            raise BatchPatchApplyError("未知 Patch Action")
 
         current_after = staged.target_path.read_bytes()
 
         if self._sha256(current_after) != patch.after_sha256:
             raise BatchPatchApplyError(
-                "写入后的文件 Hash 不一致: " f"{patch.relative_path}"
+                "写入后的文件 " "Hash 不一致: " f"{patch.relative_path}"
             )
 
     def exists(

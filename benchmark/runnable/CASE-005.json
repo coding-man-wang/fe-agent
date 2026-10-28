@@ -15,12 +15,26 @@
     ],
     "useful_context_files": [
       "src/types/domain.ts",
-      "src/mocks/database.ts"
+      "src/mocks/database.ts",
+      "src/api/requestClient.ts",
+      "src/api/users.ts",
+      "src/router/index.ts"
     ],
     "expected_change_files": [
       "src/views/OrdersView.vue",
       "src/api/orders.ts",
       "src/mocks/service.ts"
+    ],
+    "allowed_change_files": [
+      "tests/unit",
+      "tests/e2e"
+    ],
+    "forbidden_change_files": [
+      "src/types/domain.ts",
+      "src/mocks/database.ts",
+      "src/router",
+      "src/stores/users.ts",
+      "src/views/UsersView.vue"
     ],
     "expected_behaviors": [
       "订单列表支持 all、pending、paid、cancelled 四种筛选状态",
@@ -37,6 +51,9 @@
       "frontend-typecheck",
       "frontend-unit-test",
       "frontend-build"
+    ],
+    "required_impact_files": [
+      "src/router/index.ts"
     ]
   }
 }

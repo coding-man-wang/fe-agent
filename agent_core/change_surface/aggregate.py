@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from agent_core.change_surface.model import ResolvedChangeSurface
 from agent_core.change_surface.unresolved import UnresolvedQuestionConsolidator
+
 if TYPE_CHECKING:
     from agent_core.sdd.model import TaskPlan
 
@@ -37,6 +38,7 @@ class ChangeSurfaceAggregator:
         surfaces: list[ResolvedChangeSurface],
         task_plan: TaskPlan | None = None,
         unresolved_consolidator: UnresolvedQuestionConsolidator | None = None,
+        create_files: set[str] = set(),
     ) -> ResolvedChangeSurface:
         if not task_id.strip():
             raise ValueError("task_id 不能为空")
@@ -55,20 +57,16 @@ class ChangeSurfaceAggregator:
             task_type = task_type_by_id.get(surface.task_id, "unknown")
             unresolved.extend(surface.unresolved)
             rationale.extend(surface.rationale)
-
+            create_files.update(surface.create_files)
             for role in cls.ROLE_ORDER:
                 for raw_path in getattr(surface, role):
                     normalized = cls._normalize_path(raw_path)
                     if not normalized:
                         continue
-                    appearances[normalized].append(
-                        (surface.task_id, task_type, role)
-                    )
+                    appearances[normalized].append((surface.task_id, task_type, role))
                     original_path_by_normalized.setdefault(normalized, raw_path)
 
-        merged: dict[str, list[str]] = {
-            role: [] for role in cls.ROLE_ORDER
-        }
+        merged: dict[str, list[str]] = {role: [] for role in cls.ROLE_ORDER}
 
         for normalized_path in sorted(appearances):
             entries = appearances[normalized_path]
@@ -109,6 +107,9 @@ class ChangeSurfaceAggregator:
             unresolved=consolidated_unresolved,
             rationale=rationale,
             execution_disposition=disposition,
+            create_files=sorted(
+                path for path in create_files if path in merged["tests"]
+            ),
         )
 
     @classmethod
@@ -120,7 +121,9 @@ class ChangeSurfaceAggregator:
     ) -> str:
         if cls._is_test_path(path):
             # 测试文件的“可修改角色”永远是 tests，而不是生产 implementation target。
-            if any(role in {"implementation_targets", "tests"} for _, _, role in entries):
+            if any(
+                role in {"implementation_targets", "tests"} for _, _, role in entries
+            ):
                 return "tests"
             if any(role == "dependencies" for _, _, role in entries):
                 return "dependencies"

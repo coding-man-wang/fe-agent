@@ -25,24 +25,17 @@ FileExecutionStatus = Literal[
 
 
 class FileExecutionRecord(BaseModel):
-    """
-    单个文件在一次 Patch Batch Execution 中的执行状态。
-
-    pending:
-        尚未真正修改正式文件。
-
-    applied:
-        已经将 approved patch 写入正式文件。
-
-    rolled_back:
-        之前已经 applied，随后又安全恢复到了 before 版本。
-    """
-
     model_config = ConfigDict(extra="forbid")
 
     relative_path: str = Field(min_length=1)
 
-    expected_sha256: str = Field(
+    action: Literal[
+        "modify",
+        "create",
+    ] = "modify"
+
+    expected_sha256: str | None = Field(
+        default=None,
         min_length=64,
         max_length=64,
     )

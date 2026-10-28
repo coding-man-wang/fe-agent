@@ -39,19 +39,38 @@ class PatchPlanner:
             path = change.relative_path
 
             if path in seen_paths:
-                raise PatchPlanningError("同一文件存在重复修改提案: " f"{path}")
+                raise PatchPlanningError("同一文件存在" "重复修改提案: " f"{path}")
 
             seen_paths.add(path)
 
-            file_snapshot = snapshot_map.get(path)
+            if change.action == "modify":
 
-            if file_snapshot is None:
-                raise PatchPlanningError("修改文件不存在于分析快照: " f"{path}")
+                file_snapshot = snapshot_map.get(path)
+
+                if file_snapshot is None:
+                    raise PatchPlanningError(
+                        "modify target " "不存在于分析快照: " f"{path}"
+                    )
+
+                expected_sha256 = file_snapshot.sha256
+
+            elif change.action == "create":
+
+                if path in snapshot_map:
+                    raise PatchPlanningError(
+                        "create target " "已经存在于分析快照: " f"{path}"
+                    )
+
+                expected_sha256 = None
+
+            else:
+                raise PatchPlanningError("未知 Patch Action: " f"{change.action}")
 
             targets.append(
                 PatchTarget(
                     relative_path=path,
-                    expected_sha256=(file_snapshot.sha256),
+                    action=(change.action),
+                    expected_sha256=(expected_sha256),
                     objective=(change.objective),
                     proposed_approach=(change.proposed_approach),
                 )

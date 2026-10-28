@@ -7,6 +7,7 @@ from pydantic import (
 )
 
 FileRecoveryState = Literal[
+    "absent",
     "before",
     "after",
     "diverged",
@@ -14,24 +15,14 @@ FileRecoveryState = Literal[
 
 
 class FileRecoveryAssessment(BaseModel):
-    """
-    单个文件当前磁盘状态与 Proposal / Journal
-    对账后的结果。
-
-    before:
-        当前文件仍然是 Agent 执行前的版本。
-
-    after:
-        当前文件正好是 Agent 批准并写入后的版本。
-
-    diverged:
-        当前文件既不是 before，也不是 after。
-        通常意味着 Agent 执行之后又发生了外部修改。
-    """
-
     model_config = ConfigDict(extra="forbid")
 
     relative_path: str
+
+    action: Literal[
+        "modify",
+        "create",
+    ] = "modify"
 
     journal_status: Literal[
         "pending",
@@ -41,7 +32,8 @@ class FileRecoveryAssessment(BaseModel):
 
     current_state: FileRecoveryState
 
-    current_sha256: str = Field(
+    current_sha256: str | None = Field(
+        default=None,
         min_length=64,
         max_length=64,
     )

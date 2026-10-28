@@ -37,6 +37,7 @@ class ProductionExecutionSurfacePolicy:
                 "references": references,
                 "tests": [],
                 "rationale": rationale,
+                "create_files": [],
             },
         )
 
@@ -98,6 +99,7 @@ class TestExecutionSurfacePolicy:
                 # 保留测试文件可写。
                 "tests": list(surface.tests),
                 "rationale": rationale,
+                "create_files": list(surface.create_files),
             },
         )
 

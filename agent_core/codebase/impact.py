@@ -220,7 +220,20 @@ class RepositoryChangeImpactAnalyzer:
         for changed_path in normalized_changed:
 
             if changed_path not in node_paths:
+
+                # 新创建的测试文件
+                # 本来就不可能出现在
+                # 修改前 Dependency Graph。
+                #
+                # 如果 Change Surface
+                # 已经明确知道它是测试，
+                # 不应因此把 Impact
+                # 误判成 unknown。
+                if changed_path in known_tests:
+                    continue
+
                 unresolved_changed_files.append(changed_path)
+
                 continue
 
             hits = graph_query.dependents(

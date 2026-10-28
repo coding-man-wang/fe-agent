@@ -27,6 +27,32 @@ TaskExecutionStatus = Literal[
 ]
 
 
+class VerificationExecutionAttempt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt: int = Field(ge=1)
+
+    kind: Literal[
+        "initial",
+        "repair",
+    ]
+
+    proposal_id: str
+
+    workspace_id: str
+
+    status: Literal[
+        "succeeded",
+        "failed",
+    ]
+
+    command_ids: list[str] = Field(default_factory=list)
+
+    checks: list[VerificationCheck] = Field(default_factory=list)
+
+    error: str | None = None
+
+
 class FullExecutionTaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -76,6 +102,15 @@ class FullExecutionTaskRecord(BaseModel):
     verification_status: str | None = None
 
     verification_checks: list[VerificationCheck] = Field(default_factory=list)
+
+    verification_repair_count: int = Field(
+        default=0,
+        ge=0,
+    )
+
+    verification_attempts: list[VerificationExecutionAttempt] = Field(
+        default_factory=list
+    )
 
     completion_status: str | None = None
 

@@ -19,10 +19,19 @@ class CodeFinding(BaseModel):
     )
 
 
+CodeChangeAction = Literal[
+    "modify",
+    "create",
+]
+
+
 class ProposedCodeChange(BaseModel):
+
     model_config = ConfigDict(extra="forbid")
 
     relative_path: str
+
+    action: CodeChangeAction = "modify"
 
     objective: str = Field(min_length=1)
 
@@ -121,3 +130,21 @@ class ReadOnlyCodingResult(BaseModel):
     )
 
     execution_status: Literal["not_executed"] = "not_executed"
+
+
+CodeChangeAction = Literal[
+    "modify",
+    "create",
+]
+
+
+class ProposedCodeChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    relative_path: str
+
+    action: CodeChangeAction = "modify"
+
+    objective: str = Field(min_length=1)
+
+    proposed_approach: str = Field(min_length=1)

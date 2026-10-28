@@ -20,6 +20,7 @@ from agent_core.benchmark.execution_evaluator import (
 from agent_core.benchmark.execution_model import (
     FullExecutionRunRecord,
     FullExecutionTaskRecord,
+    VerificationExecutionAttempt,
 )
 from agent_core.benchmark.execution_store import (
     FullExecutionRunStore,
@@ -94,6 +95,7 @@ from agent_core.coding.verification_store import (
 )
 from agent_core.coding.workspace_execution import (
     WorkspaceExecutionService,
+    WorkspaceExecutionError,
 )
 from agent_core.git.commit_service import (
     AgentGitCommitService,
@@ -114,6 +116,7 @@ from agent_core.sdd.model import (
 from agent_core.sdd.task_graph import (
     topological_sort_tasks,
 )
+from agent_core.coding.verification_repair import VerificationRepairService
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -287,6 +290,8 @@ class FullExecutionBenchmarkService:
         text_model = LLMTextModelAdapter(llm=self.llm)
 
         coding_agent = ReadOnlyCodingAgent(model=text_model)
+
+        verification_repair_service = VerificationRepairService(model=text_model)
 
         analysis_store = AnalysisArtifactStore(self.runtime_state_root)
 
@@ -1219,20 +1224,313 @@ class FullExecutionBenchmarkService:
 
                     # ==================================
                     # Side Effect Execution
+                    #
+                    # Verification-guided
+                    # Bounded Repair
+                    #
+                    # v1：
+                    #
+                    # - 仅 test Task；
+                    # - 最多修复一次；
+                    # - 文件集合不能变化；
+                    # - Patch Action 不能变化；
+                    # - 新 Proposal 必须使用
+                    #   新 Workspace；
+                    # - 新 Workspace 仍从同一个
+                    #   current_sha 创建。
                     # ==================================
 
-                    execution = await WorkspaceExecutionService(
-                        runtime_root=(self.runtime_state_root),
-                        approval_store=(approval_store),
-                        journal_store=(journal_store),
-                        verification_store=(verification_store),
-                        completion_store=(completion_store),
-                        verification_policy=(verification_policy),
-                    ).execute(
-                        workspace=(workspace),
-                        proposal=(proposal),
-                        verification_plan=(verification_plan),
-                    )
+                    MAX_VERIFICATION_REPAIRS = 1
+
+                    verification_attempts = list(task_record.verification_attempts)
+
+                    repair_count = 0
+
+                    active_proposal = proposal
+
+                    active_review = review
+
+                    active_workspace = workspace
+
+                    active_verification_plan = verification_plan
+
+                    execution = None
+
+                    while True:
+
+                        try:
+                            execution = await WorkspaceExecutionService(
+                                runtime_root=(self.runtime_state_root),
+                                approval_store=(approval_store),
+                                journal_store=(journal_store),
+                                verification_store=(verification_store),
+                                completion_store=(completion_store),
+                                verification_policy=(verification_policy),
+                            ).execute(
+                                workspace=(active_workspace),
+                                proposal=(active_proposal),
+                                verification_plan=(active_verification_plan),
+                            )
+
+                        except WorkspaceExecutionError as exc:
+
+                            # ==================================
+                            # 只有真正产生了 Verification
+                            # failed Record，
+                            # 才属于可考虑 Repair 的失败。
+                            #
+                            # Binding / Apply / Identity
+                            # 等错误绝不能进入 LLM Repair。
+                            # ==================================
+
+                            if not verification_store.exists(active_review.proposal_id):
+                                raise
+
+                            failed_verification = verification_store.load(
+                                active_review.proposal_id
+                            )
+
+                            if failed_verification.result is None:
+                                raise
+
+                            failed_checks = list(failed_verification.result.checks)
+
+                            failed_command_ids = [
+                                check.command_id
+                                for check in failed_checks
+                                if (check.command_id is not None)
+                            ]
+
+                            verification_attempts.append(
+                                VerificationExecutionAttempt(
+                                    attempt=(len(verification_attempts) + 1),
+                                    kind=("initial" if repair_count == 0 else "repair"),
+                                    proposal_id=(active_review.proposal_id),
+                                    workspace_id=(active_workspace.workspace_id),
+                                    status="failed",
+                                    command_ids=(failed_command_ids),
+                                    checks=failed_checks,
+                                    error=(f"{type(exc).__name__}: " f"{exc}"),
+                                )
+                            )
+
+                            task_record = task_record.model_copy(
+                                deep=True,
+                                update={
+                                    "workspace_id": (active_workspace.workspace_id),
+                                    "proposal_id": (active_review.proposal_id),
+                                    "verification_status": (failed_verification.status),
+                                    "verification_checks": (failed_checks),
+                                    "executed_verification_command_ids": (
+                                        failed_command_ids
+                                    ),
+                                    "verification_attempts": (verification_attempts),
+                                    "verification_repair_count": (repair_count),
+                                },
+                            )
+
+                            # ==================================
+                            # Bounded Repair Eligibility
+                            # ==================================
+
+                            if task.task_type != "test":
+                                raise
+
+                            if repair_count >= MAX_VERIFICATION_REPAIRS:
+                                raise
+
+                            if failed_verification.status != "failed":
+                                raise
+
+                            # ==================================
+                            # Verification Feedback
+                            # → Repair Proposal
+                            #
+                            # 注意：
+                            #
+                            # repository_root 使用
+                            # analysis_root，
+                            # 即当前 Task 的 Base Revision。
+                            #
+                            # 失败 Workspace 的文件
+                            # 不作为新的 Base。
+                            #
+                            # failed proposal 的 after_content
+                            # 已经在 active_proposal 中提供。
+                            # ==================================
+
+                            repair_result = await verification_repair_service.repair(
+                                proposal=(active_proposal),
+                                verification=(failed_verification),
+                                bundle=bundle,
+                                repository_root=(analysis_root),
+                            )
+
+                            if repair_result.proposal is None:
+                                raise (
+                                    FullExecutionBenchmarkError(
+                                        "VerificationRepair"
+                                        "NotPossible: " + repair_result.reason
+                                    )
+                                ) from exc
+
+                            repaired_proposal = repair_result.proposal
+
+                            # ==================================
+                            # Repair Proposal 仍然必须重新
+                            # 经过 Scope Guard。
+                            #
+                            # Repair 不获得特殊权限。
+                            # ==================================
+
+                            repair_decision = run_coordinator.guard_patch_proposal(
+                                proposal=(repaired_proposal),
+                                surface=(execution_surface),
+                            )
+
+                            if not (repair_decision.allowed):
+                                raise (
+                                    FullExecutionBenchmarkError(
+                                        "Verification Repair "
+                                        "越过 Change Surface: "
+                                        + "; ".join(repair_decision.reasons)
+                                    )
+                                )
+
+                            # ==================================
+                            # Repair Review / Approval
+                            # ==================================
+
+                            repaired_review = reviewer.prepare(repaired_proposal)
+
+                            approval_store.record_decision(
+                                review=repaired_review,
+                                decision="approved",
+                                reason=(
+                                    "benchmark auto-approval: "
+                                    "verification-guided "
+                                    "bounded repair; "
+                                    "same change-surface + "
+                                    "same patch boundary"
+                                ),
+                            )
+
+                            # ==================================
+                            # Repair 必须使用新 Workspace
+                            #
+                            # Proposal ID 已经变化，
+                            # Workspace ID 自然变化。
+                            #
+                            # base_commit_sha 仍然是
+                            # current_sha。
+                            #
+                            # 不继承失败 Workspace。
+                            # ==================================
+
+                            repaired_workspace = await workspace_manager.create(
+                                task_id=(task.task_id),
+                                proposal_id=(repaired_review.proposal_id),
+                                base_commit_sha=(current_sha),
+                            )
+
+                            self._assert_proposal_matches_execution_workspace(
+                                proposal=(repaired_proposal),
+                                execution_root=Path(repaired_workspace.worktree_path),
+                                analysis_root=(analysis_root),
+                                commit_sha=(current_sha),
+                            )
+
+                            dependency_provisioner.provision(
+                                repaired_workspace.worktree_path
+                            )
+
+                            repaired_verification_plan = VerificationPlan(
+                                proposal_id=(repaired_review.proposal_id),
+                                task_id=(task.task_id),
+                                command_ids=list(task_command_ids),
+                            )
+
+                            repair_count += 1
+
+                            active_proposal = repaired_proposal
+
+                            active_review = repaired_review
+
+                            active_workspace = repaired_workspace
+
+                            active_verification_plan = repaired_verification_plan
+
+                            task_record = task_record.model_copy(
+                                deep=True,
+                                update={
+                                    "workspace_id": (active_workspace.workspace_id),
+                                    "proposal_id": (active_review.proposal_id),
+                                    "proposed_files": (
+                                        sorted(
+                                            patch.relative_path
+                                            for patch in active_proposal.patches
+                                        )
+                                    ),
+                                    "verification_repair_count": (repair_count),
+                                    "verification_attempts": (verification_attempts),
+                                },
+                            )
+
+                            continue
+
+                        # ==================================
+                        # Verification succeeded
+                        # ==================================
+
+                        assert execution is not None
+
+                        success_checks = []
+
+                        if execution.verification.result is not None:
+                            success_checks = list(execution.verification.result.checks)
+
+                        success_command_ids = [
+                            check.command_id
+                            for check in success_checks
+                            if (check.command_id is not None)
+                        ]
+
+                        verification_attempts.append(
+                            VerificationExecutionAttempt(
+                                attempt=(len(verification_attempts) + 1),
+                                kind=("initial" if repair_count == 0 else "repair"),
+                                proposal_id=(active_review.proposal_id),
+                                workspace_id=(active_workspace.workspace_id),
+                                status="succeeded",
+                                command_ids=(success_command_ids),
+                                checks=(success_checks),
+                                error=None,
+                            )
+                        )
+
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "verification_attempts": (verification_attempts),
+                                "verification_repair_count": (repair_count),
+                            },
+                        )
+
+                        break
+
+                    # ==================================
+                    # 后续 Commit / Artifact
+                    # 必须使用最终成功的 Proposal
+                    # 和 Workspace。
+                    # ==================================
+
+                    proposal = active_proposal
+
+                    review = active_review
+
+                    workspace = active_workspace
+
+                    verification_plan = active_verification_plan
 
                     verification_checks = []
 
@@ -1499,6 +1797,25 @@ class FullExecutionBenchmarkService:
         """
 
         for patch in proposal.patches:
+            path = execution_root / patch.relative_path
+
+            if patch.action == "create":
+
+                if path.exists() or path.is_symlink():
+                    raise (
+                        FullExecutionBenchmarkError(
+                            "Proposal create target "
+                            "在 execution workspace "
+                            "已经存在: "
+                            f"path="
+                            f"{patch.relative_path}, "
+                            f"commit="
+                            f"{commit_sha}"
+                        )
+                    )
+
+                continue
+
             path = execution_root / patch.relative_path
 
             try:

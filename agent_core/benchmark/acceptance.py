@@ -44,6 +44,14 @@ class HiddenAcceptanceRegistry:
                 ),
             )
         ),
+        "CASE-005": (
+            HiddenAcceptanceSpec(
+                fixture_name=("CASE-005.test.ts"),
+                relative_path=(
+                    "tests/unit/" "__fe_agent_hidden__/" "CASE-005.acceptance.test.ts"
+                ),
+            )
+        ),
         "CASE-006": (
             HiddenAcceptanceSpec(
                 fixture_name=("CASE-006.test.ts"),

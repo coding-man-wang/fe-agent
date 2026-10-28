@@ -8,19 +8,17 @@ from pydantic import (
 
 
 class ExecutedFileChange(BaseModel):
-    """
-    一个已经真实写入仓库的文件变更。
-
-    注意：
-    这不是“计划修改什么”，
-    而是“Runtime 已经确认修改成功什么”。
-    """
-
     model_config = ConfigDict(extra="forbid")
 
     relative_path: str = Field(min_length=1)
 
-    before_sha256: str = Field(
+    action: Literal[
+        "modify",
+        "create",
+    ] = "modify"
+
+    before_sha256: str | None = Field(
+        default=None,
         min_length=64,
         max_length=64,
     )

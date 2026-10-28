@@ -12,7 +12,12 @@ class ReviewFile(BaseModel):
 
     relative_path: str
 
-    expected_sha256: str
+    action: Literal[
+        "modify",
+        "create",
+    ] = "modify"
+
+    expected_sha256: str | None = None
 
     after_sha256: str
 

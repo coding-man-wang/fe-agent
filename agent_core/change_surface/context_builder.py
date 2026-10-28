@@ -58,6 +58,7 @@ class ResolvedTaskContextBuilder:
             index=index,
             selection=selection,
             surface=surface,
+            task=task,
         )
         refined = self.context_policy.apply(
             selection=expanded,
@@ -103,6 +104,7 @@ class ResolvedTaskContextBuilder:
         index: RepositoryFileIndex,
         selection: HybridRelevantFileSelection,
         surface: ResolvedChangeSurface,
+        task: TaskDefinition,
     ) -> HybridRelevantFileSelection:
         existing = {item.relative_path: item for item in selection.selected_files}
         file_map = {item.relative_path: item for item in index.files}
@@ -141,6 +143,80 @@ class ResolvedTaskContextBuilder:
                 )
             )
             next_rank += 1
+        # ==================================
+        # Test Pattern Context
+        #
+        # Test Task 在没有同功能测试时，
+        # 仍然需要知道仓库当前测试风格。
+        #
+        # 注意：
+        # 这些文件没有进入 surface，
+        # 因此只能作为 context_only/read-only。
+        # ==================================
+
+        if task.task_type == "test":
+
+            existing_paths = {item.relative_path for item in expanded}
+
+            test_records = [
+                record
+                for record in index.files
+                if (record.is_indexable and record.category == "test")
+            ]
+
+            pattern_records = []
+
+            for prefix in (
+                "tests/unit/",
+                "tests/e2e/",
+            ):
+                matches = sorted(
+                    (
+                        record
+                        for record in test_records
+                        if (
+                            record.relative_path.replace(
+                                "\\",
+                                "/",
+                            ).startswith(prefix)
+                        )
+                    ),
+                    key=lambda record: (record.relative_path),
+                )
+
+                if matches:
+                    pattern_records.append(matches[0])
+
+            for record in pattern_records:
+
+                if record.relative_path in existing_paths:
+                    continue
+
+                expanded.append(
+                    HybridRelevantFile(
+                        relative_path=(record.relative_path),
+                        category=(record.category),
+                        language=(record.language),
+                        size_bytes=(record.size_bytes),
+                        retrieval_score=0.0,
+                        retrieval_rank=(next_rank),
+                        policy_score=0,
+                        policy_rank=None,
+                        selection_score=0.0,
+                        matched_queries=[],
+                        matched_intents=[],
+                        target_match_type=("none"),
+                        target_match_value=(None),
+                        context_role=("reference"),
+                        role_reason=("existing test " "pattern reference"),
+                        reasons=["Test Task " "只读测试模式参考"],
+                    )
+                )
+
+                existing_paths.add(record.relative_path)
+
+                next_rank += 1
+
         return selection.model_copy(
             deep=True,
             update={

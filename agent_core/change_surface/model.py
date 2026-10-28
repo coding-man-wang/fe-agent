@@ -2,7 +2,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 ObservedFileRole = Literal[
     "candidate_target",
     "dependency",
@@ -29,9 +28,7 @@ class ObservedRepositoryFile(BaseModel):
     @model_validator(mode="after")
     def validate_evidence(self) -> "ObservedRepositoryFile":
         if self.observed_role != "unknown" and not self.evidence:
-            raise ValueError(
-                "非 unknown 的 observed_role 必须至少包含一条 evidence"
-            )
+            raise ValueError("非 unknown 的 observed_role 必须至少包含一条 evidence")
         return self
 
 
@@ -56,49 +53,131 @@ class ResolvedChangeSurface(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str = Field(min_length=1)
+
     implementation_targets: list[str] = Field(default_factory=list)
+
     dependencies: list[str] = Field(default_factory=list)
+
     references: list[str] = Field(default_factory=list)
+
     tests: list[str] = Field(default_factory=list)
+
+    # ==================================
+    # Prospective Write Targets
+    #
+    # 当前文件还不存在，
+    # 但已经由 Harness 批准
+    # 可以 CREATE。
+    #
+    # v1 只允许 Test Task 使用。
+    #
+    # create_files 必须同时属于 tests。
+    # ==================================
+
+    create_files: list[str] = Field(default_factory=list)
+
     unresolved: list[str] = Field(default_factory=list)
+
     rationale: list[str] = Field(default_factory=list)
+
     execution_disposition: ExecutionDisposition | None = Field(
         default=None,
         description=(
-            "Runtime 根据最终 Change Surface 推导的执行处置："
-            "需要修改、无需修改、或证据不足。"
+            "Runtime 根据最终 "
+            "Change Surface "
+            "推导的执行处置："
+            "需要修改、无需修改、"
+            "或证据不足。"
         ),
     )
 
     @model_validator(mode="after")
-    def validate_file_roles(self) -> "ResolvedChangeSurface":
+    def validate_file_roles(
+        self,
+    ) -> "ResolvedChangeSurface":
+
         groups = {
-            "implementation_targets": self.implementation_targets,
-            "dependencies": self.dependencies,
-            "references": self.references,
-            "tests": self.tests,
+            "implementation_targets": (self.implementation_targets),
+            "dependencies": (self.dependencies),
+            "references": (self.references),
+            "tests": (self.tests),
         }
-        owner_by_path: dict[str, str] = {}
+
+        owner_by_path: dict[
+            str,
+            str,
+        ] = {}
+
         for role, paths in groups.items():
             for path in paths:
-                normalized = path.replace("\\", "/").strip()
+                normalized = path.replace(
+                    "\\",
+                    "/",
+                ).strip()
+
                 if not normalized:
-                    raise ValueError(f"{role} 中不能包含空路径")
+                    raise ValueError(f"{role} " "中不能包含空路径")
+
                 previous = owner_by_path.get(normalized)
+
                 if previous is not None:
                     raise ValueError(
-                        f"文件 {normalized} 同时出现在 {previous} 和 {role}"
+                        f"文件 {normalized} " f"同时出现在 " f"{previous} " f"和 {role}"
                     )
+
                 owner_by_path[normalized] = role
+
+        normalized_create = [
+            path.replace("\\", "/").strip() for path in self.create_files
+        ]
+
+        if any(not path for path in normalized_create):
+            raise ValueError("create_files " "不能包含空路径")
+
+        if len(normalized_create) != len(set(normalized_create)):
+            raise ValueError("create_files " "存在重复路径")
+
+        normalized_tests = {path.replace("\\", "/").strip() for path in self.tests}
+
+        missing_test_role = set(normalized_create) - normalized_tests
+
+        if missing_test_role:
+            raise ValueError(
+                "v1 create_files "
+                "必须同时属于 tests: " + ", ".join(sorted(missing_test_role))
+            )
+
+        non_test_roles = {
+            path.replace("\\", "/").strip()
+            for path in [
+                *self.implementation_targets,
+                *self.dependencies,
+                *self.references,
+            ]
+        }
+
+        overlap = set(normalized_create) & non_test_roles
+
+        if overlap:
+            raise ValueError(
+                "create file "
+                "不能同时属于生产/"
+                "dependency/reference: " + ", ".join(sorted(overlap))
+            )
+
         return self
 
-    def allowed_change_files(self) -> set[str]:
+    def allowed_change_files(
+        self,
+    ) -> set[str]:
         return {
             *self.implementation_targets,
             *self.tests,
         }
 
-    def requires_patch(self) -> bool:
+    def requires_patch(
+        self,
+    ) -> bool:
         return self.execution_disposition == "change_required" and bool(
             self.implementation_targets or self.tests
         )

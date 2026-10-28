@@ -157,6 +157,7 @@ class TaskExecutionArtifactBuilder:
             changed_files=[
                 ExecutedFileChange(
                     relative_path=(item.relative_path),
+                    action=(item.action),
                     before_sha256=(item.expected_sha256),
                     after_sha256=(item.after_sha256),
                     status="applied",

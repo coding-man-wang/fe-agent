@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -212,7 +213,25 @@ async def _prepare_fresh(
             selection=selection,
             task_plan=baseline.task_plan,
         )
+
+        print("\n=== Fresh Change Surface ===")
+
+        print(
+            json.dumps(
+                {
+                    "task_id": task.task_id,
+                    "task_type": task.task_type,
+                    "title": task.title,
+                    "target_modules": list(task.target_modules),
+                    "surface": (surface.model_dump(mode="json")),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
         task_surfaces[task.task_id] = surface
+
         surfaces.append(surface)
 
     combined = ChangeSurfaceAggregator().combine(

@@ -17,6 +17,9 @@ from agent_core.context.model import (
     RenderedContext,
     TaskContextBundle,
 )
+from agent_core.change_surface.create_target_policy import (
+    CreateTargetPolicy,
+)
 
 
 class PreparationError(ValueError):
@@ -49,6 +52,8 @@ class ExecutionPreparer:
         self.artifact_store = artifact_store
 
         self.message_provider = message_provider
+
+        self.create_target_policy = CreateTargetPolicy()
 
     def prepare(
         self,
@@ -95,17 +100,75 @@ class ExecutionPreparer:
 
             self._validate_code_freshness(item)
 
-        # 5. 检查模型提出的修改目标。
+        # ==================================
+        # 5. 检查模型提出的修改目标
+        # ==================================
+
+        surface_data = bundle.change_surface or {}
+
+        writable_paths = {
+            *surface_data.get(
+                "implementation_targets",
+                [],
+            ),
+            *surface_data.get(
+                "tests",
+                [],
+            ),
+        }
+
+        create_paths = set(
+            surface_data.get(
+                "create_files",
+                [],
+            )
+        )
+
         proposed_paths: list[str] = []
 
         for change in artifact.result.proposed_changes:
 
             normalized = self._normalize_path(change.relative_path)
 
-            if normalized not in context_paths:
+            if normalized not in writable_paths:
                 raise PreparationError(
-                    "修改目标不在已验证的 Context 中: " f"{normalized}"
+                    "修改目标超出 " "Change Surface: " f"{normalized}"
                 )
+
+            if change.action == "modify":
+                if normalized not in context_paths:
+                    raise PreparationError(
+                        "modify 目标不在" "已验证 Context 中: " f"{normalized}"
+                    )
+
+                if normalized in create_paths:
+                    raise PreparationError(
+                        "create target " "不能作为 modify: " f"{normalized}"
+                    )
+
+            elif change.action == "create":
+
+                if bundle.task.task_type != "test":
+                    raise PreparationError("v1 只有 test Task " "允许 create")
+
+                if normalized not in create_paths:
+                    raise PreparationError(
+                        "create target "
+                        "未经过 "
+                        "Change Surface "
+                        "批准: "
+                        f"{normalized}"
+                    )
+
+                (
+                    self.create_target_policy.validate_test_create_path(
+                        repository_root=(self.root),
+                        relative_path=(normalized),
+                    )
+                )
+
+            else:
+                raise PreparationError("未知 change action: " f"{change.action}")
 
             proposed_paths.append(normalized)
 
@@ -121,6 +184,7 @@ class ExecutionPreparer:
                 "context_consistency",
                 "repository_freshness",
                 "path_boundary",
+                "prospective_create_boundary",
             ],
         )
 

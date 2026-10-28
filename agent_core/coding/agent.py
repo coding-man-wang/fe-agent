@@ -46,7 +46,8 @@ JSON 必须符合以下结构：
   ],
   "proposed_changes": [
     {
-      "relative_path": "需要修改的已有文件路径",
+      "relative_path": "需要修改或创建的文件路径",
+      "action": "modify 或 create",
       "objective": "修改目标",
       "proposed_approach": "建议修改方式"
     }
@@ -70,8 +71,33 @@ JSON 必须符合以下结构：
 }
 
 要求：
-1. 只能引用提供的 Code Context 中出现的文件路径。
-2. findings.evidence 必须直接复制自相应文件的 code_context.content。
+1. findings 只能引用提供的 Code Context
+   中真实存在的文件。
+
+2. action=modify：
+   relative_path 必须来自 Code Context，
+   并且必须属于当前 Change Surface
+   的 writable targets。
+
+3. action=create：
+   relative_path 不需要出现在 Code Context，
+   但必须严格来自
+   change_surface.create_files。
+
+4. 不得为 create target 伪造 findings.evidence，
+   因为该文件当前还不存在。
+
+5. create target 当前没有源码内容，
+   本身不属于 blocking evidence gap。
+
+6. 如果 Repository test_stack / scripts
+   已经能确认测试框架和运行方式，
+   “当前没有同功能测试文件”
+   不能单独作为 blocking evidence gap。
+
+7. 已有测试文件如果只是作为模式参考，
+   不得因为读取了它就修改它。
+8. findings.evidence 必须直接复制自相应文件的 code_context.content。
 
    - 优先引用短小、明确、稳定的源码片段；
    - 最好引用单行源码；
@@ -83,24 +109,24 @@ JSON 必须符合以下结构：
 
    如果必须引用多行代码，可以改变换行和缩进，
    但实际代码内容必须来自提供的 code_context。
-3. 如果代码不足以支持结论，不要编造证据；
+9. 如果代码不足以支持结论，不要编造证据；
    应放入 missing_information。
-4. 只提出修改方案，不声称已经修改或测试。
-5. 不要输出工具调用或可执行动作指令。
-6. 新输出优先使用 evidence_gaps，
+10. 只提出修改方案，不声称已经修改或测试。
+11. 不要输出工具调用或可执行动作指令。
+12. 新输出优先使用 evidence_gaps，
    missing_information 保持为空数组。
 
-7. severity = blocking：
+13. severity = blocking：
    缺少该信息会导致你无法可靠判断：
    - 当前 implementation target 是否需要修改；
    - 应该如何安全修改；
    - 修改是否违反明确接口、业务或架构约束。
 
-8. severity = advisory：
+14. severity = advisory：
    信息虽然有帮助，但不影响当前是否需要修改、
    或如何修改的判断。
 
-9. resolution_stage = analysis：
+15. resolution_stage = analysis：
    该证据必须通过进一步分析代码、接口、配置、
    业务规则等方式补齐。
 
@@ -110,7 +136,7 @@ JSON 必须符合以下结构：
    - 无法确认关键业务约束；
    - 无法判断应该修改哪个模块。
 
-10. resolution_stage = verification：
+16. resolution_stage = verification：
     当前静态代码已经足够判断是否需要修改以及如何修改，
     但还需要后续执行来证明行为正确。
 
@@ -122,24 +148,24 @@ JSON 必须符合以下结构：
     - 尚未实际验证是否存在重复请求；
     - 尚未实际验证 UI interaction。
 
-11. 不要因为尚未运行测试、构建、浏览器或运行时验证，
+17. 不要因为尚未运行测试、构建、浏览器或运行时验证，
     就阻塞当前 Coding Decision。
 
     如果这些信息只用于证明修改后的行为是否正确：
     severity 应为 advisory，
     resolution_stage 应为 verification。
 
-12. 只有当缺少运行时信息导致你连
+18. 只有当缺少运行时信息导致你连
     “是否需要修改”或“应该如何修改”
     都无法判断时，
     才可以使用：
     resolution_stage = analysis。
 
-13. resolution_stage = verification 的 Evidence Gap
+19. resolution_stage = verification 的 Evidence Gap
     不应被用来扩大 proposed_changes。
     Verification 负责证明行为，
     Coding Analysis 负责决定修改。
-14. 不要基于未提供证据的“假设性项目约定”
+20. 不要基于未提供证据的“假设性项目约定”
     创建 blocking evidence gap。
 
     例如：
@@ -148,13 +174,13 @@ JSON 必须符合以下结构：
     Engineering Rules 或 Upstream Artifacts
     中存在该约定证据时，才能作为 blocker。
 
-15. 如果你已经明确判断某项缺失信息
+21. 如果你已经明确判断某项缺失信息
     “不影响当前任务判断”、
     “不影响是否需要修改”或
     “当前代码已经足够判断”，
     severity 不允许为 blocking。
 
-16. 当前 Task 可能运行在前序任务已经修改后的
+22. 当前 Task 可能运行在前序任务已经修改后的
     最新 Repository Revision 上。
 
     如果当前最新代码已经满足本 Task，
@@ -382,7 +408,13 @@ JSON 必须符合以下结构：
 
     5. findings.evidence 必须来自提供的 code_context。
 
-    6. proposed_changes 只能引用提供的代码文件。
+    6. action=modify 只能引用提供的代码文件。
+
+    7. action=create 只能引用
+       change_surface.create_files。
+    
+    8. create target 当前没有 code_context
+       是正常情况，不要因此改成 blocking gap。
 
     上一次结构校验错误：
 
@@ -459,12 +491,65 @@ JSON 必须符合以下结构：
                     f"evidence={evidence_preview!r}"
                 )
 
+        surface_data = bundle.change_surface or {}
+
+        create_paths = set(
+            surface_data.get(
+                "create_files",
+                [],
+            )
+        )
+
+        writable_paths = {
+            *surface_data.get(
+                "implementation_targets",
+                [],
+            ),
+            *surface_data.get(
+                "tests",
+                [],
+            ),
+        }
+
         for change in result.proposed_changes:
 
-            if change.relative_path not in code_map:
+            path = change.relative_path
+
+            if path not in writable_paths:
                 raise CodingOutputError(
-                    "修改提案引用了未提供的文件: " f"{change.relative_path}"
+                    "修改提案超出 " "Change Surface " "写边界: " f"{path}"
                 )
+
+            if change.action == "modify":
+                if path not in code_map:
+                    raise CodingOutputError(
+                        "modify 提案引用了" "未提供的已有文件: " f"{path}"
+                    )
+
+                if path in create_paths:
+                    raise CodingOutputError(
+                        "create target " "不能声明为 modify: " f"{path}"
+                    )
+
+                continue
+
+            if change.action == "create":
+                if path not in create_paths:
+                    raise CodingOutputError(
+                        "create 提案不属于 "
+                        "change_surface."
+                        "create_files: "
+                        f"{path}"
+                    )
+
+                if path in code_map:
+                    raise CodingOutputError(
+                        "create target " "已经存在于 " "Code Context: " f"{path}"
+                    )
+
+                continue
+
+            raise CodingOutputError("未知 proposed change " f"action: {change.action}")
 
     def prepare_messages(
         self,
