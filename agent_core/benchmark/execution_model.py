@@ -114,6 +114,11 @@ class FullExecutionTaskRecord(BaseModel):
         default_factory=list
     )
 
+    verification_repair_correction_count: int = Field(
+        default=0,
+        ge=0,
+    )
+
     completion_status: str | None = None
 
     commit_sha: str | None = None

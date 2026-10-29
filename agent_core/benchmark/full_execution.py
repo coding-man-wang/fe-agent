@@ -116,10 +116,12 @@ from agent_core.sdd.model import (
 from agent_core.sdd.task_graph import (
     topological_sort_tasks,
 )
-from agent_core.coding.verification_repair import VerificationRepairService
+from agent_core.coding.verification_repair import (
+    VerificationRepairService,
+    VerificationRepairCorrectionFeedback,
+)
 from agent_core.coding.verification_repair_integrity import (
     VerificationRepairIntegrityGuard,
-    VerificationRepairIntegrityError,
 )
 from agent_core.policies.resolver import (
     EngineeringPolicyResolver,
@@ -1249,6 +1251,9 @@ class FullExecutionBenchmarkService:
                         proposal_id=(review.proposal_id),
                         task_id=(task.task_id),
                         command_ids=list(task_command_ids),
+                        execution_mode=(
+                            "collect_all" if task.task_type == "test" else "fail_fast"
+                        ),
                     )
 
                     task_record = task_record.model_copy(
@@ -1279,6 +1284,27 @@ class FullExecutionBenchmarkService:
                     # ==================================
 
                     MAX_VERIFICATION_REPAIRS = 1
+
+                    # ==================================
+                    # Repair Proposal Correction Budget
+                    #
+                    # Repair Proposal 在真正产生
+                    # Side Effect 之前，
+                    # 如果被 Integrity Guard 拒绝，
+                    # 最多允许根据结构化 violation
+                    # 重新生成一次 Proposal。
+                    #
+                    # 注意：
+                    #
+                    # 这不属于第二次 Verification Repair，
+                    # 因为：
+                    #
+                    # - 没有创建 Workspace
+                    # - 没有 Apply
+                    # - 没有重新 Verification
+                    # ==================================
+
+                    MAX_REPAIR_PROPOSAL_CORRECTIONS = 1
 
                     verification_attempts = list(task_record.verification_attempts)
 
@@ -1397,74 +1423,218 @@ class FullExecutionBenchmarkService:
                             # 已经在 active_proposal 中提供。
                             # ==================================
 
-                            repair_result = await verification_repair_service.repair(
-                                proposal=(active_proposal),
-                                verification=(failed_verification),
-                                bundle=bundle,
-                                repository_root=(analysis_root),
-                                effective_policy=(effective_policy),
-                            )
-
-                            if repair_result.proposal is None:
-                                raise (
-                                    FullExecutionBenchmarkError(
-                                        "VerificationRepair"
-                                        "NotPossible: " + repair_result.reason
-                                    )
-                                ) from exc
-
-                            repaired_proposal = repair_result.proposal
-
                             # ==================================
-                            # Repair Proposal 仍然必须重新
-                            # 经过 Scope Guard。
+                            # Verification Feedback
+                            # → Repair Proposal
                             #
-                            # Repair 不获得特殊权限。
+                            # Repair Proposal 允许在
+                            # Side Effect 发生之前，
+                            # 根据 Integrity Guard Feedback
+                            # 做一次 Bounded Correction。
+                            #
+                            # 注意：
+                            #
+                            # correction != verification retry
+                            #
+                            # correction 期间：
+                            #
+                            # - 不创建 Workspace
+                            # - 不 Apply Patch
+                            # - 不运行 Verification
+                            # - 不增加 repair_count
+                            #
                             # ==================================
 
-                            repair_decision = run_coordinator.guard_patch_proposal(
-                                proposal=(repaired_proposal),
-                                surface=(execution_surface),
-                            )
+                            correction_feedback: list[
+                                VerificationRepairCorrectionFeedback
+                            ] = []
 
-                            if not (repair_decision.allowed):
+                            repaired_proposal = None
+
+                            for correction_attempt in range(
+                                MAX_REPAIR_PROPOSAL_CORRECTIONS + 1
+                            ):
+
+                                # ==================================
+                                # Generate Repair Proposal
+                                #
+                                # 非常重要：
+                                #
+                                # 无论第几次 Correction，
+                                # proposal 始终使用
+                                # active_proposal。
+                                #
+                                # active_proposal 是真正经历
+                                # Verification Failure 的 Proposal。
+                                #
+                                # 不能把上一份被 Integrity Guard
+                                # 拒绝的 Repair Proposal
+                                # 当成新的 baseline。
+                                # ==================================
+
+                                repair_result = (
+                                    await verification_repair_service.repair(
+                                        proposal=(active_proposal),
+                                        verification=(failed_verification),
+                                        bundle=bundle,
+                                        repository_root=(analysis_root),
+                                        effective_policy=(effective_policy),
+                                        correction_feedback=(correction_feedback),
+                                    )
+                                )
+
+                                # ==================================
+                                # Repair explicitly says:
+                                #
+                                # 当前 Patch Boundary 内
+                                # 无法安全修复。
+                                #
+                                # 这时不能继续 Correction。
+                                # ==================================
+
+                                if repair_result.proposal is None:
+                                    raise (
+                                        FullExecutionBenchmarkError(
+                                            "VerificationRepair"
+                                            "NotPossible: " + repair_result.reason
+                                        )
+                                    ) from exc
+
+                                candidate_proposal = repair_result.proposal
+
+                                # ==================================
+                                # Scope Guard
+                                #
+                                # 每一份 Correction Proposal
+                                # 都必须重新经过 Scope Guard。
+                                #
+                                # Repair / Correction
+                                # 都不会获得新的写权限。
+                                # ==================================
+
+                                repair_decision = run_coordinator.guard_patch_proposal(
+                                    proposal=(candidate_proposal),
+                                    surface=(execution_surface),
+                                )
+
+                                if not (repair_decision.allowed):
+                                    raise (
+                                        FullExecutionBenchmarkError(
+                                            "Verification Repair "
+                                            "越过 Change Surface: "
+                                            + "; ".join(repair_decision.reasons)
+                                        )
+                                    ) from exc
+
+                                # ==================================
+                                # Verification Repair Integrity
+                                #
+                                # IMPORTANT:
+                                #
+                                # baseline 始终是：
+                                #
+                                #     active_proposal
+                                #
+                                # 即真正 Verification Failed
+                                # 的 Proposal。
+                                #
+                                # 不能改成：
+                                #
+                                #     previous repair candidate
+                                #
+                                # 否则连续 Correction
+                                # 可能逐步降低 Verification Strength。
+                                # ==================================
+
+                                integrity_result = (
+                                    verification_repair_integrity_guard.evaluate(
+                                        failed_proposal=(active_proposal),
+                                        repaired_proposal=(candidate_proposal),
+                                    )
+                                )
+
+                                # ==================================
+                                # Integrity Passed
+                                #
+                                # 当前 Candidate 才正式成为
+                                # 可以进入 Reviewer /
+                                # Workspace 的 Repair Proposal。
+                                # ==================================
+
+                                if integrity_result.allowed:
+                                    repaired_proposal = candidate_proposal
+
+                                    break
+
+                                # ==================================
+                                # Integrity Failed
+                                #
+                                # 已耗尽 Correction Budget。
+                                #
+                                # Fail closed。
+                                #
+                                # 绝不能：
+                                #
+                                # - 忽略 violation
+                                # - 自动放宽 Guard
+                                # - 继续创建 Workspace
+                                # ==================================
+
+                                if (
+                                    correction_attempt
+                                    >= MAX_REPAIR_PROPOSAL_CORRECTIONS
+                                ):
+                                    raise (
+                                        FullExecutionBenchmarkError(
+                                            "VerificationRepair"
+                                            "IntegrityViolation: "
+                                            + integrity_result.format_message()
+                                        )
+                                    ) from exc
+
+                                # ==================================
+                                # Structured Integrity Feedback
+                                #
+                                # 把确定性 Harness Gate
+                                # 发现的问题转成
+                                # Repair Service 能消费的
+                                # 结构化 Feedback。
+                                #
+                                # 下一轮模型不能自己猜：
+                                #
+                                # “为什么上一份 Proposal
+                                #  被拒绝？”
+                                #
+                                # Harness 明确告诉它。
+                                # ==================================
+
+                                correction_feedback = [
+                                    VerificationRepairCorrectionFeedback(
+                                        code=(violation.code),
+                                        relative_path=(violation.relative_path),
+                                        message=(violation.message),
+                                    )
+                                    for violation in integrity_result.violations
+                                ]
+
+                            # ==================================
+                            # Defensive Invariant
+                            #
+                            # 正常情况下：
+                            #
+                            # - Repair Not Possible 已 raise
+                            # - Integrity exhausted 已 raise
+                            # - 成功则 repaired_proposal != None
+                            #
+                            # 此处只是防御性检查。
+                            # ==================================
+
+                            if repaired_proposal is None:
                                 raise (
                                     FullExecutionBenchmarkError(
                                         "Verification Repair "
-                                        "越过 Change Surface: "
-                                        + "; ".join(repair_decision.reasons)
-                                    )
-                                )
-                            # ==================================
-                            # Verification Repair Integrity
-                            #
-                            # Scope Guard 回答：
-                            #
-                            #   “你能不能改这些文件？”
-                            #
-                            # Integrity Guard 回答：
-                            #
-                            #   “你是不是通过削弱测试
-                            #    把 Verification 变绿？”
-                            #
-                            # 两者职责不能混在一起。
-                            # ==================================
-
-                            try:
-                                (
-                                    verification_repair_integrity_guard.enforce(
-                                        failed_proposal=(active_proposal),
-                                        repaired_proposal=(repaired_proposal),
-                                    )
-                                )
-
-                            except VerificationRepairIntegrityError as exc:
-
-                                raise (
-                                    FullExecutionBenchmarkError(
-                                        "VerificationRepair"
-                                        "IntegrityViolation: "
-                                        f"{exc}"
+                                        "没有生成通过 Integrity Gate "
+                                        "的 Proposal"
                                     )
                                 ) from exc
 
@@ -1519,6 +1689,9 @@ class FullExecutionBenchmarkService:
                                 proposal_id=(repaired_review.proposal_id),
                                 task_id=(task.task_id),
                                 command_ids=list(task_command_ids),
+                                execution_mode=(
+                                    active_verification_plan.execution_mode
+                                ),
                             )
 
                             repair_count += 1

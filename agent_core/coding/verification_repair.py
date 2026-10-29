@@ -237,19 +237,36 @@ class VerificationRepairService:
    - 删除 Requirement 要求覆盖的行为。
 
 10. 如果发现某个测试场景本身
-    使用了错误测试层级：
+    使用了错误测试层级
+    或错误 Proof Strategy：
 
-    例如 build-time / startup-time
-    配置被错误假设为可以在浏览器
-    运行过程中动态切换，
+    例如：
 
-    可以修正这个测试场景，
+    - Mock 模式下错误地通过
+      HTTP request count
+      证明数据 reload；
 
-    但只有在提供的 Repository Evidence
-    表明对应业务契约已经由其他合理测试
-    覆盖时，才允许删除重复且错误的场景。
+    - build-time / startup-time
+      配置被错误假设为可以在
+      浏览器运行期间动态切换；
 
-    否则返回 repairable=false，
+    不允许直接删除、跳过、
+    重命名原 Test Case。
+
+    应优先：
+
+    - 保留原 Test Case Title；
+    - 保留原 Behavioral Obligation；
+    - 修正 Test Implementation；
+    - 修正 Test Environment；
+    - 修正 Proof Strategy。
+
+    如果当前 Patch Boundary 内
+    无法在保持 Verification Obligation
+    的情况下安全修复：
+
+        repairable=false
+
     交给更高层 Replanning。
 
 11. verification_environment_context
@@ -334,6 +351,30 @@ class VerificationRepairService:
         repairable=false
 
     不允许继续弱化测试。
+26. Correction 仍然基于
+    original_proposal_targets。
+
+    上一份被 Harness 拒绝的
+    Repair Proposal
+    不是新的 Verification Truth，
+    也不是新的 Patch Baseline。
+
+    本轮必须重新从：
+
+        original failed proposal
+        +
+        verification failure
+        +
+        correction feedback
+
+    推导新的 Repair Proposal。
+
+27. 不允许通过连续多轮 Correction
+    逐步降低 Verification Strength。
+
+    correction_feedback
+    只能用于修正上一轮的违规方式，
+    不能改变原 Verification Obligation。
 输出：
 
 {
@@ -467,6 +508,114 @@ class VerificationRepairService:
     - 不允许通过 skip/todo
       或降低 Verification Obligation
       获得 green。
+    
+        当失败来自某个 assertion
+        使用了错误 Proof Strategy 时：
+    
+        可以修改该 assertion
+        “如何证明行为成立”，
+    
+        但必须：
+    
+        - 保留原 Test Case Title；
+        - 保留原 Behavioral Obligation；
+        - 不得通过删除整个场景解决；
+        - 不得通过减少 Verification Strength
+          获得 green。
+    
+        Proof Strategy 可以改变，
+        Verification Obligation 不能减少。
+    """.strip()
+
+    MIXED_INSTRUCTION = """
+    当前 Repair Mode：
+
+        mixed
+
+    说明同一个失败 Proposal
+    同时存在：
+
+    - Structural Verification Failure
+    - Behavioral Verification Failure
+
+    例如：
+
+    - lint / typecheck
+      与
+    - unit / e2e
+
+    同时失败。
+
+    本轮目标不是只修复
+    第一个出现的错误。
+
+    你必须同时分析
+    verification_failures 中的
+    所有 failed checks。
+
+    修复原则：
+
+    1. Structural Failure：
+
+       修复：
+
+       - typing
+       - import
+       - lint
+       - module setup
+       - mock typing
+       - syntax
+
+       不允许通过：
+
+       - eslint-disable
+       - @ts-ignore
+       - @ts-nocheck
+
+       绕过工程规范。
+
+    2. Behavioral Failure：
+
+       判断失败属于：
+
+       - Test Bug
+       - Test Environment Assumption Bug
+       - Proof Strategy Bug
+       - Production Bug
+
+    3. 如果 Behavioral Failure
+       可以在当前 Test Patch Boundary
+       内修复：
+
+       修正测试实现，
+       但保持原 Verification Obligation。
+
+    4. 如果 Behavioral Failure
+       实际证明生产代码仍有问题，
+       且必须修改 Patch Boundary
+       之外的 Production Source：
+
+           repairable=false
+
+       不允许通过修改测试
+       隐藏 Production Bug。
+
+    5. 必须同时修复
+       所有提供的 Verification Failure。
+
+       不允许只修 lint，
+       忽略已经明确存在的 unit/e2e failure。
+
+    6. 仍必须遵守：
+
+       - 原 Patch Boundary；
+       - Effective Policy；
+       - Test Case Identity；
+       - Verification Integrity Guard。
+
+    7. Proof Strategy 可以修正，
+       Verification Obligation
+       不能减少。
     """.strip()
 
     def __init__(
@@ -521,10 +670,16 @@ class VerificationRepairService:
         system_message = self.SYSTEM_INSTRUCTION
 
         if repair_mode == "structural_only":
+
             system_message = system_message + "\n\n" + self.STRUCTURAL_ONLY_INSTRUCTION
 
         elif repair_mode == "behavioral":
+
             system_message = system_message + "\n\n" + self.BEHAVIORAL_INSTRUCTION
+
+        elif repair_mode == "mixed":
+
+            system_message = system_message + "\n\n" + self.MIXED_INSTRUCTION
 
         raw_output = await self.model.complete(
             system_message=(system_message),

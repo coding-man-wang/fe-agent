@@ -207,8 +207,28 @@ class VerificationExecutor:
 
             results.append(result)
 
-            # v0.1 fail-fast。
-            if result.status != "passed":
+            # ==================================
+            # Verification Execution Strategy
+            #
+            # fail_fast:
+            #   首个失败立即停止。
+            #
+            # collect_all:
+            #   即使已有失败，
+            #   仍继续收集后续 Verification
+            #   的真实执行结果。
+            #
+            # Test Task 使用 collect_all，
+            # 目的是让 Repair 一次看到：
+            #
+            # - structural failures
+            # - behavioral failures
+            #
+            # 避免前置 lint failure
+            # 隐藏后续 Unit / E2E failure。
+            # ==================================
+
+            if result.status != "passed" and plan.execution_mode == "fail_fast":
                 break
 
         checks = [
