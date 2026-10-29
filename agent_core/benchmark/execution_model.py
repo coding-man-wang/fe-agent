@@ -85,6 +85,8 @@ class FullExecutionTaskRecord(BaseModel):
 
     graph_added_files: list[str] = Field(default_factory=list)
 
+    applied_policy_rule_ids: list[str] = Field(default_factory=list)
+
     workspace_id: str | None = None
 
     proposal_id: str | None = None

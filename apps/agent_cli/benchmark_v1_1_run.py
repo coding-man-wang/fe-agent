@@ -205,9 +205,39 @@ async def _prepare_fresh(
             max_total_chars=40_000,
             max_chars_per_file=10_000,
         )
+
         if task.task_type == "investigation":
-            await coordinator.record_investigation(bundle=bundle)
+            investigation = await coordinator.record_investigation(bundle=bundle)
+
+            print("\n=== Fresh Investigation ===")
+
+            print(
+                json.dumps(
+                    {
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "target_modules": list(task.target_modules),
+                        "observed_files": [
+                            {
+                                "relative_path": (item.relative_path),
+                                "observed_role": (item.observed_role),
+                                "confidence": (item.confidence),
+                                "evidence": list(item.evidence),
+                            }
+                            for item in investigation.observed_files
+                        ],
+                        "findings": list(investigation.findings),
+                        "unresolved_questions": list(
+                            investigation.unresolved_questions
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+
             continue
+
         surface = await coordinator.resolve_change_surface(
             bundle=bundle,
             selection=selection,
@@ -233,7 +263,41 @@ async def _prepare_fresh(
         task_surfaces[task.task_id] = surface
 
         surfaces.append(surface)
+    target_contributors: dict[
+        str,
+        list[dict],
+    ] = {}
 
+    for (
+        task_id,
+        surface,
+    ) in task_surfaces.items():
+
+        for path in surface.implementation_targets:
+            target_contributors.setdefault(
+                path,
+                [],
+            ).append(
+                {
+                    "task_id": task_id,
+                    "task_type": next(
+                        item.task_type
+                        for item in baseline.task_plan.tasks
+                        if (item.task_id == task_id)
+                    ),
+                    "rationale": list(surface.rationale),
+                }
+            )
+
+    print("\n=== Change Target Contributors ===")
+
+    print(
+        json.dumps(
+            target_contributors,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     combined = ChangeSurfaceAggregator().combine(
         task_id=case.case_id,
         surfaces=surfaces,

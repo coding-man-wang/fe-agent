@@ -198,10 +198,11 @@ class ChangeSurfaceResolver:
                     raw_output=raw_output,
                     error=exc,
                     schema=schema,
-                    expected_task_id=bundle.task.task_id,
-                    task_type=bundle.task.task_type,
-                    available_paths=available_paths,
-                    candidate_targets=candidate_targets,
+                    expected_task_id=(bundle.task.task_id),
+                    task_type=(bundle.task.task_type),
+                    available_paths=(available_paths),
+                    candidate_targets=(candidate_targets),
+                    creatable_test_roots=(creatable_test_roots),
                 )
 
         error_detail = self._format_error(last_error)
@@ -429,6 +430,93 @@ class ChangeSurfaceResolver:
 
     仅仅“使用已有 contract”
     不构成修改 owner 的理由。
+    36.1 必须区分：
+
+        Existing Contract Consumption
+    
+        与
+    
+        Behavioral Contract Propagation。
+    
+        Existing Contract Consumption
+        只说明某个已有 domain/type contract
+        本身无需改变。
+    
+        它不代表负责消费、转换、传播、
+        Mock 或执行该 Contract 的行为模块
+        也无需变化。
+    
+    36.2 如果 Requirement 改变的是行为语义，
+         必须检查每一个由 candidate_target
+         所拥有的 Runtime Path。
+    
+         当存在多个等价运行路径，例如：
+    
+            Remote / Mock
+            Network / Cache
+            Server / Client fallback
+    
+         并且 Requirement 要求这些路径
+         保持一致行为，
+    
+         则每个当前仍未实现新语义的 owner
+         都属于 Minimal Necessary Change。
+    
+    36.3 不允许因为更高层调用方可以补偿行为，
+         就错误移除底层行为 owner。
+    
+         例如 Requirement 要求：
+    
+            Mock 与 Remote
+            使用相同 filtering semantics
+    
+         如果 Mock implementation 当前仍返回
+         未过滤数据，
+    
+         即使 View 可以在客户端再次过滤，
+    
+         也不能据此判断：
+    
+            Mock implementation
+            不需要修改。
+    
+         因为这会改变现有责任边界，
+         并且 Mock Runtime Path 本身仍未满足契约。
+    
+    36.4 对每一个 candidate_target 的反事实检查
+         必须基于该文件自己的 Responsibility。
+    
+         正确问题是：
+    
+            “如果这个文件保持不变，
+             它所负责的行为、Runtime Path
+             或 Contract Implementation
+             是否已经满足 Requirement？”
+    
+         而不是：
+    
+            “其他文件是否能绕过它
+             完成最终可见效果？”
+    
+    36.5 Domain definition 与
+         Contract implementation
+         必须分别判断。
+    
+         例如：
+    
+            domain/type 已经存在
+            pending | paid | cancelled
+    
+         只证明：
+    
+            domain definition
+            可能无需修改。
+    
+         如果 API adapter、Mock service、
+         store 或其他行为模块当前尚未
+         正确传播或实现这些状态对应的新行为，
+    
+         它们仍可以是 implementation_targets。
 37. create_files 表示当前 Repository 中
     尚不存在、但 Harness 允许当前 Task 创建的
     Prospective Write Target。
@@ -560,13 +648,43 @@ JSON Schema：
     如果某个文件保持不变仍然可以正确完成当前 Task，
     应从 implementation_targets 移除，
     并按用途放入 dependencies 或 references。
-14. test Task 可以使用 create_files，
+14. Existing Contract Consumption
+    只用于判断已有 domain/type
+    定义是否需要变化。
+
+    不要因此移除一个自身行为
+    仍未满足 Requirement 的
+    implementation owner。
+
+15. 如果 Requirement 要求多个 Runtime Path
+    具有相同行为，例如：
+
+        Remote / Mock
+        Network / Cache
+        Server / Client fallback
+
+    则必须分别判断这些路径自身
+    是否已经满足新行为。
+
+    不能因为某个上层调用方
+    可以补偿结果，
+    就把仍然违反行为契约的 owner
+    从 implementation_targets 删除。
+
+16. Minimal Change 的反事实问题必须是：
+
+        “该文件自己的职责是否已经满足 Requirement？”
+
+    而不是：
+
+        “其他文件能否绕过这个文件完成需求？”
+17. test Task 可以使用 create_files，
     但只能选择 creatable_test_roots
     下当前不存在的测试文件。
 
-15. create_files 中的路径必须同时放入 tests。
+18. create_files 中的路径必须同时放入 tests。
 
-16. 不允许为了修复 JSON
+19. 不允许为了修复 JSON
     创建生产代码路径。
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}

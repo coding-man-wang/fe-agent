@@ -6,7 +6,7 @@ import json
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Literal
 
 from pydantic import (
     BaseModel,
@@ -25,6 +25,9 @@ from agent_core.coding.verification_record_model import (
 )
 from agent_core.context.model import (
     TaskContextBundle,
+)
+from agent_core.policies.model import (
+    EffectivePolicy,
 )
 
 
@@ -89,6 +92,23 @@ class VerificationRepairResult:
     reason: str
 
 
+class VerificationRepairCorrectionFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1)
+
+    relative_path: str = Field(min_length=1)
+
+    message: str = Field(min_length=1)
+
+
+VerificationRepairMode = Literal[
+    "structural_only",
+    "behavioral",
+    "mixed",
+]
+
+
 class VerificationRepairService:
     """
     Verification-guided Bounded Repair。
@@ -116,6 +136,17 @@ class VerificationRepairService:
         "vite.config.js",
         "tsconfig.e2e.json",
     )
+
+    STRUCTURAL_COMMAND_IDS = {
+        "frontend-lint",
+        "frontend-typecheck",
+        "frontend-build",
+    }
+
+    BEHAVIORAL_COMMAND_IDS = {
+        "frontend-unit-test",
+        "frontend-e2e",
+    }
 
     SYSTEM_INSTRUCTION = """
 你正在修复一个已经执行过、但 Verification 失败的 Test Task。
@@ -237,6 +268,72 @@ class VerificationRepairService:
 
 15. 不要声称已经运行或通过测试。
 
+16. effective_policy 是当前 Task
+    已由外部 Policy Resolver
+    计算完成的工程规则。
+
+17. severity=must 的规则
+    在 Repair 后仍必须成立。
+
+18. Repair 不允许为了修复 Verification
+    而违反原 Effective Policy。
+
+19. Effective Policy
+    不能扩大原 Patch Boundary，
+    不能新增 Target，
+    不能改变 action。
+20. repair_correction_feedback
+    表示上一份 Repair Proposal
+    已经被确定性的 Harness Gate 拒绝。
+
+21. correction feedback 不是建议，
+    是本轮重新生成必须满足的约束。
+
+22. 如果 feedback 包含：
+
+        repair_test_case_removed
+
+    则必须保留对应 Test Case，
+    包括原有 Test Title。
+
+    应修正 Test Implementation
+    或 Proof Strategy，
+    而不是删除、跳过、重命名场景。
+
+23. 如果 feedback 包含：
+
+        repair_assertion_reduced
+
+    则不得通过减少 assertion
+    数量解决问题。
+
+    可以重写错误 assertion，
+    但必须继续证明相同或更强的
+    Behavioral Obligation。
+
+24. 如果某个 assertion 的证明方式
+    与当前 Runtime Path 不匹配：
+
+    例如 Mock 模式下错误地通过
+    HTTP request count
+    证明数据 reload，
+
+    可以改变 Proof Strategy，
+
+    但不得删除该 Requirement
+    所对应的验证义务。
+
+25. 如果无法在：
+        原 Patch Boundary
+        +
+        原 Test Case
+        +
+        原 Verification Obligation
+    下安全修复：
+
+        repairable=false
+
+    不允许继续弱化测试。
 输出：
 
 {
@@ -261,6 +358,116 @@ class VerificationRepairService:
   "changes": []
 }
 """.strip()
+
+    STRUCTURAL_ONLY_INSTRUCTION = """
+    当前 Repair Mode：
+
+        structural_only
+
+    说明当前 Verification Failure
+    只来自结构性检查，例如：
+
+    - lint
+    - typecheck
+    - build
+
+    因此本次 Repair
+    只能修复导致这些结构性错误的问题。
+
+    硬性约束：
+
+    1. 不得改变已有 Test Case
+       所验证的业务行为。
+
+    2. 不得删除、合并或重命名
+       已有 Test Case。
+
+    3. 不得减少 assertion。
+
+    4. 不得为了消除 lint/typecheck
+       而修改 assertion 的业务预期。
+
+    5. 不得修改：
+
+       - expected business value
+       - filter semantics
+       - mock business result
+       - user-visible behavior expectation
+
+    6. 应优先只修复：
+
+       - TypeScript type annotation
+       - import
+       - mock typing
+       - spy typing
+       - helper typing
+       - unsafe cast
+       - module typing
+       - syntax / lint violation
+
+    7. 对 no-explicit-any：
+
+       优先使用：
+
+       - 已有 Repository Type；
+       - 类型推导；
+       - unknown；
+       - Parameters<T>；
+       - ReturnType<T>；
+       - 明确 interface / type；
+       - 测试框架已有的 typed mock API。
+
+       不要通过：
+
+       - eslint-disable
+       - @ts-ignore
+       - @ts-nocheck
+
+       绕过工程规范。
+
+    8. 如果无法在完全保留
+       Test Behavioral Contract 的情况下
+       修复结构问题：
+
+           repairable=false
+
+       不允许通过改变测试语义获得 green。
+
+    本次目标不是重新设计测试。
+
+    本次目标只是：
+
+        修复 Structural Verification Failure。
+    """.strip()
+
+    BEHAVIORAL_INSTRUCTION = """
+    当前 Repair Mode：
+
+        behavioral
+
+    Verification Failure
+    来自 Unit Test 或 E2E Test。
+
+    可以修复：
+
+    - Mock 初始化顺序
+    - Module isolation
+    - Import timing
+    - Async waiting
+    - Locator
+    - Fixture
+    - Test environment setup
+    - 合法的 behavioral assertion implementation
+
+    但仍必须遵守：
+
+    - 原 Patch Boundary；
+    - Effective Policy；
+    - Verification Integrity Guard；
+    - 不允许通过 skip/todo
+      或降低 Verification Obligation
+      获得 green。
+    """.strip()
 
     def __init__(
         self,
@@ -289,6 +496,8 @@ class VerificationRepairService:
         verification: VerificationRunRecord,
         bundle: TaskContextBundle,
         repository_root: str | Path,
+        effective_policy: EffectivePolicy | None = None,
+        correction_feedback: list[VerificationRepairCorrectionFeedback] | None = None,
     ) -> VerificationRepairResult:
 
         self._validate_inputs(
@@ -297,19 +506,34 @@ class VerificationRepairService:
             bundle=bundle,
         )
 
+        repair_mode = self._classify_repair_mode(verification)
+
         payload = self._build_payload(
             proposal=proposal,
             verification=verification,
             bundle=bundle,
-            repository_root=repository_root,
+            repository_root=(repository_root),
+            effective_policy=(effective_policy),
+            repair_mode=repair_mode,
+            correction_feedback=(correction_feedback or []),
         )
 
+        system_message = self.SYSTEM_INSTRUCTION
+
+        if repair_mode == "structural_only":
+            system_message = system_message + "\n\n" + self.STRUCTURAL_ONLY_INSTRUCTION
+
+        elif repair_mode == "behavioral":
+            system_message = system_message + "\n\n" + self.BEHAVIORAL_INSTRUCTION
+
         raw_output = await self.model.complete(
-            system_message=(self.SYSTEM_INSTRUCTION),
-            user_message=json.dumps(
-                payload,
-                ensure_ascii=False,
-                indent=2,
+            system_message=(system_message),
+            user_message=(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    indent=2,
+                )
             ),
         )
 
@@ -344,6 +568,32 @@ class VerificationRepairService:
             proposal=repaired_proposal,
             reason=output.reason,
         )
+
+    @classmethod
+    def _classify_repair_mode(
+        cls,
+        verification: VerificationRunRecord,
+    ) -> VerificationRepairMode:
+
+        if verification.result is None:
+            raise VerificationRepairError("Verification 缺少 Result")
+
+        failed_command_ids = {
+            check.command_id
+            for check in verification.result.checks
+            if (check.status == "failed" and check.command_id is not None)
+        }
+
+        if not failed_command_ids:
+            raise VerificationRepairError("Verification Failure " "缺少 command_id")
+
+        if failed_command_ids <= cls.STRUCTURAL_COMMAND_IDS:
+            return "structural_only"
+
+        if failed_command_ids <= cls.BEHAVIORAL_COMMAND_IDS:
+            return "behavioral"
+
+        return "mixed"
 
     def _validate_inputs(
         self,
@@ -395,6 +645,9 @@ class VerificationRepairService:
         verification: VerificationRunRecord,
         bundle: TaskContextBundle,
         repository_root: str | Path,
+        effective_policy: EffectivePolicy | None,
+        repair_mode: VerificationRepairMode,
+        correction_feedback: list[VerificationRepairCorrectionFeedback],
     ) -> dict:
 
         assert verification.result is not None
@@ -438,6 +691,15 @@ class VerificationRepairService:
             "verification_environment_context": (
                 self._load_verification_context(repository_root)
             ),
+            "effective_policy": (
+                effective_policy.model_dump(mode="json")
+                if (effective_policy is not None)
+                else {"rules": []}
+            ),
+            "repair_mode": (repair_mode),
+            "repair_correction_feedback": [
+                item.model_dump(mode="json") for item in correction_feedback
+            ],
         }
 
     def _load_verification_context(

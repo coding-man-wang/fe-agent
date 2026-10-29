@@ -117,6 +117,13 @@ from agent_core.sdd.task_graph import (
     topological_sort_tasks,
 )
 from agent_core.coding.verification_repair import VerificationRepairService
+from agent_core.coding.verification_repair_integrity import (
+    VerificationRepairIntegrityGuard,
+    VerificationRepairIntegrityError,
+)
+from agent_core.policies.resolver import (
+    EngineeringPolicyResolver,
+)
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -289,9 +296,13 @@ class FullExecutionBenchmarkService:
 
         text_model = LLMTextModelAdapter(llm=self.llm)
 
+        policy_resolver = EngineeringPolicyResolver()
+
         coding_agent = ReadOnlyCodingAgent(model=text_model)
 
         verification_repair_service = VerificationRepairService(model=text_model)
+
+        verification_repair_integrity_guard = VerificationRepairIntegrityGuard()
 
         analysis_store = AnalysisArtifactStore(self.runtime_state_root)
 
@@ -842,6 +853,32 @@ class FullExecutionBenchmarkService:
                     )
 
                     # ==================================
+                    # Effective Engineering Policy
+                    #
+                    # Policy 决定：
+                    #
+                    #   How should this task be done?
+                    #
+                    # Change Surface 决定：
+                    #
+                    #   What may this task change?
+                    #
+                    # 两者严格分离。
+                    # ==================================
+
+                    effective_policy = policy_resolver.resolve(
+                        task=task,
+                        project_rules=list(bundle.engineering_rules),
+                    )
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "applied_policy_rule_ids": (effective_policy.rule_ids())
+                        },
+                    )
+
+                    # ==================================
                     # Coding Analysis
                     # ==================================
 
@@ -1013,11 +1050,12 @@ class FullExecutionBenchmarkService:
                     try:
                         proposal = await PatchGenerator(
                             repository_root=(analysis_root),
-                            model=(text_model),
+                            model=text_model,
                         ).generate(
-                            artifact=(artifact),
-                            plan=(patch_plan),
-                            preparation=(preparation),
+                            artifact=artifact,
+                            plan=patch_plan,
+                            preparation=preparation,
+                            effective_policy=(effective_policy),
                         )
 
                     except PatchGenerationNoop as noop:
@@ -1364,6 +1402,7 @@ class FullExecutionBenchmarkService:
                                 verification=(failed_verification),
                                 bundle=bundle,
                                 repository_root=(analysis_root),
+                                effective_policy=(effective_policy),
                             )
 
                             if repair_result.proposal is None:
@@ -1396,6 +1435,38 @@ class FullExecutionBenchmarkService:
                                         + "; ".join(repair_decision.reasons)
                                     )
                                 )
+                            # ==================================
+                            # Verification Repair Integrity
+                            #
+                            # Scope Guard 回答：
+                            #
+                            #   “你能不能改这些文件？”
+                            #
+                            # Integrity Guard 回答：
+                            #
+                            #   “你是不是通过削弱测试
+                            #    把 Verification 变绿？”
+                            #
+                            # 两者职责不能混在一起。
+                            # ==================================
+
+                            try:
+                                (
+                                    verification_repair_integrity_guard.enforce(
+                                        failed_proposal=(active_proposal),
+                                        repaired_proposal=(repaired_proposal),
+                                    )
+                                )
+
+                            except VerificationRepairIntegrityError as exc:
+
+                                raise (
+                                    FullExecutionBenchmarkError(
+                                        "VerificationRepair"
+                                        "IntegrityViolation: "
+                                        f"{exc}"
+                                    )
+                                ) from exc
 
                             # ==================================
                             # Repair Review / Approval

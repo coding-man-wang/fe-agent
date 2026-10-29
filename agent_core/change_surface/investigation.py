@@ -171,6 +171,96 @@ class InvestigationArtifactBuilder:
         contract / state / invariant / behavior
         因 Requirement 发生变化时，
         才形成修改义务。
+    7.6 必须识别 Cross-layer Contract Propagation
+    （跨层契约传播）。
+
+    Existing Contract Consumption
+    只用于判断：
+
+        “领域定义 / 类型定义本身
+         是否需要变化？”
+
+    它不能被扩大解释为：
+
+        “所有使用这个已有 Contract 的
+         行为实现都不需要修改。”
+
+    7.7 如果 Requirement 改变的是一个行为契约，
+        必须检查负责实现该行为的每一个 Runtime Path
+        是否已经满足新契约。
+    
+        例如同一个业务操作存在：
+    
+            - Remote API path
+            - Mock path
+    
+        或：
+    
+            - cache path
+            - network path
+    
+        或：
+    
+            - server path
+            - client fallback path
+    
+        如果 Requirement 明确要求这些路径
+        具有一致行为，
+    
+        则每一个当前行为仍不满足 Requirement 的
+        implementation owner
+        都可以是 candidate_target。
+    
+    7.8 判断 Behavioral Contract Change 时，
+        应关注文件自身拥有的行为是否变化。
+    
+        例如某函数当前：
+    
+            listSomething()
+            → 永远返回全部数据
+    
+        Requirement 要求：
+    
+            listSomething(filter)
+            → 根据 filter 返回结果
+    
+        即使 Domain Type 已经完整支持 filter 的值，
+        该函数自身的输入/输出行为仍发生变化。
+    
+        因此其 implementation owner
+        可以是 candidate_target。
+    
+    7.9 不得通过把行为泄漏到更高层调用方，
+        来排除真正的行为 owner。
+    
+        例如：
+    
+            Mock Service 应负责 Mock filtering
+    
+        不能仅因为：
+    
+            View 可以 fetch all
+            再进行 client-side filter
+    
+        就把 Mock Service 降级为 dependency，
+    
+        如果 Requirement 或现有职责边界明确要求
+        Mock backend 自己提供相同 filtering semantics。
+    
+    7.10 对跨层行为执行反事实检查时，
+         问题必须是：
+    
+            “如果这个文件完全不改，
+             它自己负责的 Runtime Path
+             是否仍然满足 Requirement 所要求的契约？”
+    
+         而不是：
+    
+            “其他文件是否可以绕过它，
+             让最终 UI 看起来正确？”
+    
+         如果当前 Runtime Path 自身仍违反 Requirement，
+         则该 owner 存在修改义务。
 8. target_match_type、relevance_reasons、rerank rank、
    directory match、Graph relation 都只能帮助定位代码，
    不能作为 candidate_target 的直接证据。

@@ -14,6 +14,9 @@ from agent_core.coding.patch_generation_model import (
 )
 from agent_core.coding.patch_model import PatchPlan
 from agent_core.coding.preparation_model import ExecutionPreparation
+from agent_core.policies.model import (
+    EffectivePolicy,
+)
 
 
 class PatchGenerationError(ValueError):
@@ -290,8 +293,34 @@ class PatchGenerator:
         不要 Markdown，
         不要代码围栏，
         不要解释文字。
-
-    输出：
+    14. user payload 中可能包含
+        effective_policy。
+    
+        effective_policy 是由外部
+        Policy Resolver 计算出的
+        当前 Task 工程规则。
+    
+    15. severity=must 的 Policy
+        必须遵守。
+    
+    16. severity=should 的 Policy
+        应优先遵守；
+        如果与真实 Repository Evidence、
+        Requirement 或 Harness Boundary
+        冲突，应以更高优先级事实为准。
+    
+    17. Effective Policy
+        不能扩大 PatchPlan.targets，
+        不能改变 action，
+        不能获得新的写权限。
+    
+    18. Policy 描述的是
+        “如何正确实现”，
+        PatchPlan 描述的是
+        “允许修改什么”。
+    
+        两者不得混淆。
+        输出：
 
     {
       "task_id": "当前 Task ID",
@@ -310,20 +339,29 @@ class PatchGenerator:
         *,
         artifact: AnalysisArtifact,
         plan: PatchPlan,
-        source_files: dict[str, str],
+        source_files: dict[
+            str,
+            str | None,
+        ],
+        effective_policy: EffectivePolicy | None,
     ) -> str:
 
         payload = {
             "task_id": plan.task_id,
             "analysis": (artifact.result.model_dump(mode="json")),
+            "effective_policy": (
+                effective_policy.model_dump(mode="json")
+                if (effective_policy is not None)
+                else {"rules": []}
+            ),
             "targets": [
                 {
-                    "relative_path": target.relative_path,
-                    "objective": target.objective,
+                    "relative_path": (target.relative_path),
+                    "objective": (target.objective),
                     "proposed_approach": (target.proposed_approach),
                     "expected_sha256": (target.expected_sha256),
                     "before_content": (source_files[target.relative_path]),
-                    "action": target.action,
+                    "action": (target.action),
                 }
                 for target in plan.targets
             ],
@@ -341,6 +379,7 @@ class PatchGenerator:
         artifact: AnalysisArtifact,
         plan: PatchPlan,
         preparation: ExecutionPreparation,
+        effective_policy: EffectivePolicy | None = None,
     ) -> FilePatchProposal:
 
         self._validate_inputs(
@@ -372,7 +411,8 @@ class PatchGenerator:
         user_message = self._build_user_message(
             artifact=artifact,
             plan=plan,
-            source_files=source_files,
+            source_files=(source_files),
+            effective_policy=(effective_policy),
         )
 
         raw_output = await self.model.complete(
