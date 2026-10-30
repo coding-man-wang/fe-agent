@@ -136,7 +136,10 @@ from agent_core.benchmark.verification_strategy import (
     VerificationStrategyResolver,
     VerificationStrategyGuard,
     merge_effective_policy,
+    VerificationStrategyPlan,
+    VerificationStrategyPatchGenerator,
 )
+from agent_core.benchmark.obligation_evidence import ObligationEvidenceEnricher
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -347,6 +350,8 @@ class FullExecutionBenchmarkService:
         coding_agent = ReadOnlyCodingAgent(model=text_model)
 
         execution_obligation_gate = ExecutionObligationGate()
+
+        obligation_evidence_enricher = ObligationEvidenceEnricher(max_added_files=2)
 
         verification_repair_service = VerificationRepairService(model=text_model)
 
@@ -905,6 +910,88 @@ class FullExecutionBenchmarkService:
                     )
 
                     # ==================================
+                    # v1.3C
+                    #
+                    # Execution Obligation
+                    # Evidence Enrichment
+                    #
+                    # Compression 已经把多个
+                    # Logical code_change Tasks
+                    # 合成一个 Execution Unit。
+                    #
+                    # 此时仅合并 responsibility
+                    # 还不够：
+                    #
+                    # Coding Agent 还必须看到
+                    # 足以支撑这些 Responsibility
+                    # 的 Repository Evidence。
+                    #
+                    # 这里只扩展：
+                    #
+                    #     Read Context
+                    #
+                    # 不扩展：
+                    #
+                    #     Change Surface
+                    #     Execution Surface
+                    #     Write Permission
+                    # ==================================
+
+                    obligation_enrichment = obligation_evidence_enricher.enrich(
+                        repository_root=(analysis_root),
+                        bundle=bundle,
+                    )
+
+                    bundle = obligation_enrichment.bundle
+
+                    # ==================================
+                    # Context Observability
+                    #
+                    # selected_context_files
+                    # 应反映 Agent 最终真正看到的
+                    # Code Context，
+                    # 不只是最初 Retrieval Selection。
+                    # ==================================
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "selected_context_files": [
+                                item.relative_path for item in bundle.code_context
+                            ],
+                            "obligation_evidence_files": (
+                                obligation_enrichment.added_files
+                            ),
+                            ("obligation_evidence_" "evicted_files"): (
+                                obligation_enrichment.evicted_files
+                            ),
+                        },
+                    )
+
+                    # ==================================
+                    # Execution Obligation
+                    # Evidence Enrichment
+                    #
+                    # Compression 把多个 Logical Task
+                    # 合并后，Context 必须同时保留
+                    # 能支撑这些 Obligation 的
+                    # Repository Patterns。
+                    #
+                    # 新增文件只是 Read Context，
+                    # 不会进入 Change Surface。
+                    # ==================================
+
+                    if task.task_type == "code_change" and getattr(
+                        task,
+                        "execution_obligations",
+                        [],
+                    ):
+                        bundle = obligation_evidence_enricher.enrich(
+                            repository_root=(analysis_root),
+                            bundle=bundle,
+                        )
+
+                    # ==================================
                     # Effective Engineering Policy
                     #
                     # Policy 决定：
@@ -1075,9 +1162,44 @@ class FullExecutionBenchmarkService:
                     # 的执行义务。
                     # ==================================
 
+                    # ==================================
+                    # v1.3C
+                    # Compressed Execution
+                    # Obligation Gate
+                    # ==================================
+
                     obligation_decision = execution_obligation_gate.evaluate(
                         task=task,
                         analysis=analysis,
+                    )
+
+                    # ==================================
+                    # Observability First
+                    #
+                    # Gate 即使失败，
+                    # Run Record 也必须保留：
+                    #
+                    # expected
+                    # satisfied
+                    # unresolved
+                    #
+                    # 否则失败 Trace 无法解释
+                    # Harness 为什么阻断。
+                    # ==================================
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            ("expected_execution_" "obligation_ids"): (
+                                obligation_decision.expected_obligation_ids
+                            ),
+                            ("satisfied_execution_" "obligation_ids"): (
+                                obligation_decision.satisfied_obligation_ids
+                            ),
+                            ("unresolved_execution_" "obligation_ids"): (
+                                obligation_decision.unresolved_obligation_ids
+                            ),
+                        },
                     )
 
                     if not (obligation_decision.allowed):
@@ -1087,21 +1209,6 @@ class FullExecutionBenchmarkService:
                                 "Incomplete: " + " | ".join(obligation_decision.reasons)
                             )
                         )
-
-                    task_record = task_record.model_copy(
-                        deep=True,
-                        update={
-                            "expected_execution_obligation_ids": (
-                                obligation_decision.expected_obligation_ids
-                            ),
-                            "satisfied_execution_obligation_ids": (
-                                obligation_decision.satisfied_obligation_ids
-                            ),
-                            "unresolved_execution_obligation_ids": (
-                                obligation_decision.unresolved_obligation_ids
-                            ),
-                        },
-                    )
                     # ==================================
                     # Publish Final Analysis
                     #

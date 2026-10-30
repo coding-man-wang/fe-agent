@@ -139,6 +139,33 @@ class FullExecutionTaskRecord(BaseModel):
 
     unresolved_execution_obligation_ids: list[str] = Field(default_factory=list)
 
+    # ==================================
+    # Execution Obligation
+    # Evidence Observability
+    # ==================================
+
+    obligation_evidence_files: list[str] = Field(
+        default_factory=list,
+    )
+
+    obligation_evidence_evicted_files: list[str] = Field(
+        default_factory=list,
+    )
+
+    # ==================================
+    # v1.3D Verification Strategy
+    #
+    # Strategy 是 Task-specific，
+    # 不应该只记录在 Run Root。
+    # ==================================
+
+    verification_strategy: dict[str, Any] | None = None
+
+    test_strategy_proposal_correction_count: int = Field(
+        default=0,
+        ge=0,
+    )
+
 
 class FullExecutionEvaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -267,6 +267,78 @@ JSON 必须符合以下结构：
     不是 blocking coding evidence gap。
     这是 Proof Routing 问题，
     不应该阻塞当前层对其他可观察行为的测试实现。
+37. execution_obligation.status=unresolved
+    只允许用于真正缺少外部权威 Contract，
+    且根据以下信息仍无法安全做出
+    Implementation Decision 的情况：
+
+    - Requirement
+    - Acceptance Criteria
+    - TechnicalSpec
+    - Current Code Context
+    - Domain Types
+    - Existing Repository Pattern
+    - Engineering Rules
+    - Upstream Artifacts
+
+38. “当前 Repository 以前没有实现这个功能”
+    本身不能成为 unresolved 的理由。
+
+    如果当前 Logical Task 的目标
+    正是新增该行为，
+    并且 Requirement 已定义业务语义，
+    Repository 又存在可以复用的工程模式，
+    应使用：
+
+        addressed_by_proposed_change
+
+    而不是：
+
+        unresolved
+
+39. 必须区分：
+
+    Existing External Contract Unknown
+        → 可以 unresolved
+
+    Implementation Detail To Be Designed
+        → 不应仅因为历史代码不存在
+          就 unresolved。
+
+40. 对 API / Runtime Path 的实现判断，
+    应优先综合：
+
+    - Domain Type
+    - 相邻 API Module
+    - Similar Implementation
+    - request client convention
+    - Mock convention
+    - Requirement semantics
+
+    不要求当前 feature
+    已经存在逐字相同的历史实现。
+
+41. 对 Filter State 与 Domain State：
+
+    如果 all 表示“不应用过滤条件”，
+    且 Domain Status 本身不包含 all，
+    不得仅因为历史 Remote API
+    没有 all 的现成实现
+    就声明 Contract 缺失。
+
+    应优先保持：
+
+        all
+        → 不发送具体 Domain Status
+
+42. Repository 中如果已经提供
+    Same-layer Similar Implementation，
+    应优先沿用其参数传递、
+    request config 和 Runtime Pattern。
+
+    只有当现有 Pattern 与 Requirement
+    产生真实冲突时，
+    才允许升级为 unresolved。
 """.strip()
 
     RUNTIME_RECONCILIATION_REVIEW_INSTRUCTION = """

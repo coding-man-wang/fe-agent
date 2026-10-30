@@ -679,20 +679,18 @@ class ExecutionPlanCompressor:
                 dependency
                 for member in members
                 for dependency in member.depends_on
-                if (dependency not in member_ids)
+                if dependency not in member_ids
             ]
         )
 
         objectives = self._stable_unique(
-            [member.objective for member in members if (member.objective.strip())]
+            [member.objective for member in members if member.objective.strip()]
         )
 
         if len(objectives) == 1:
-
             merged_objective = objectives[0]
 
         else:
-
             merged_objective = (
                 "当前 Execution Unit "
                 "需要一次性满足以下 "
@@ -702,61 +700,67 @@ class ExecutionPlanCompressor:
                     for member in members
                 )
             )
-            # ==================================
-            # Compression Obligation
-            #
-            # 不依赖模型重新总结，
-            # 直接保留每一个来源 Logical Task。
-            # ==================================
 
-            execution_obligations = [
-                ExecutionObligation(
-                    obligation_id=member.task_id,
-                    source_task_id=member.task_id,
-                    objective=member.objective,
-                    responsibilities=list(
-                        getattr(
-                            member,
-                            "responsibilities",
-                            [],
-                        )
-                    ),
-                    expected_outputs=list(member.expected_outputs),
-                    acceptance_criteria_refs=list(member.acceptance_criteria_refs),
-                )
-                for member in members
-            ]
+        # ==================================
+        # Compression Obligation
+        #
+        # 无论 Logical Tasks 的 objective
+        # 是否相同，都必须逐项保留
+        # Execution Obligation。
+        #
+        # Execution Granularity 可以压缩，
+        # Execution Obligation 不能丢失。
+        # ==================================
 
-            updates: dict = {
-                "objective": merged_objective,
-                "depends_on": (external_dependencies),
-                "execution_obligations": (execution_obligations),
-            }
-
-            available_fields = type(leader).model_fields
-
-            for field_name in self.MERGE_LIST_FIELDS:
-                if field_name not in available_fields:
-                    continue
-
-                merged_values = self._stable_unique(
-                    [
-                        value
-                        for member in members
-                        for value in getattr(
-                            member,
-                            field_name,
-                            [],
-                        )
-                    ]
-                )
-
-                updates[field_name] = merged_values
-
-            return leader.model_copy(
-                deep=True,
-                update=updates,
+        execution_obligations = [
+            ExecutionObligation(
+                obligation_id=(member.task_id),
+                source_task_id=(member.task_id),
+                objective=(member.objective),
+                responsibilities=list(
+                    getattr(
+                        member,
+                        "responsibilities",
+                        [],
+                    )
+                ),
+                expected_outputs=list(member.expected_outputs),
+                acceptance_criteria_refs=list(member.acceptance_criteria_refs),
             )
+            for member in members
+        ]
+
+        updates: dict = {
+            "objective": merged_objective,
+            "depends_on": external_dependencies,
+            "execution_obligations": execution_obligations,
+        }
+
+        available_fields = type(leader).model_fields
+
+        for field_name in self.MERGE_LIST_FIELDS:
+
+            if field_name not in available_fields:
+                continue
+
+            merged_values = self._stable_unique(
+                [
+                    value
+                    for member in members
+                    for value in getattr(
+                        member,
+                        field_name,
+                        [],
+                    )
+                ]
+            )
+
+            updates[field_name] = merged_values
+
+        return leader.model_copy(
+            deep=True,
+            update=updates,
+        )
 
     # ==================================
     # Dependency Rewrite
