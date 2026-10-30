@@ -16,8 +16,11 @@ class ContextRoleClassifier:
         判断文件和任务是否相关。
 
     Target Evidence:
-        判断文件和 Planner 的
-        target_modules 有什么匹配关系。
+        判断文件与 Planner 提供的
+        Repository Hint 是否存在匹配。
+
+        它只影响候选 Context Role，
+        不授予修改权限。
 
     Context Role:
         判断文件最终准备在当前

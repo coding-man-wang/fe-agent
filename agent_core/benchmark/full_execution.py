@@ -126,6 +126,17 @@ from agent_core.coding.verification_repair_integrity import (
 from agent_core.policies.resolver import (
     EngineeringPolicyResolver,
 )
+from agent_core.benchmark.execution_plan import (
+    ExecutionPlanCompressor,
+)
+from agent_core.benchmark.execution_obligation import (
+    ExecutionObligationGate,
+)
+from agent_core.benchmark.verification_strategy import (
+    VerificationStrategyResolver,
+    VerificationStrategyGuard,
+    merge_effective_policy,
+)
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -285,11 +296,40 @@ class FullExecutionBenchmarkService:
         ],
     ) -> FullExecutionRunRecord:
 
+        # ==================================
+        # v1.3C
+        #
+        # Execution Plan Compression
+        #
+        # Logical Plan 继续作为：
+        #
+        #     reasoning / provenance truth
+        #
+        # Execution Plan 只决定：
+        #
+        #     Runtime granularity
+        #
+        # Baseline Surface 只允许用于：
+        #
+        #     compression decision
+        #
+        # 绝不允许直接成为当前 Revision
+        # 的 Write Permission。
+        # ==================================
+
+        compression = ExecutionPlanCompressor().compress(
+            task_plan=task_plan,
+            task_surfaces=(task_surfaces),
+        )
+
+        execution_task_plan = compression.execution_task_plan
+
         record = FullExecutionRunRecord(
             run_id=self.run_id,
             baseline_run_id=(self.baseline_run_id),
             case_id=case.case_id,
             base_commit_sha=(case.base_commit_sha),
+            execution_plan_compression=(compression.summary),
         )
 
         self.store.save(record)
@@ -300,7 +340,13 @@ class FullExecutionBenchmarkService:
 
         policy_resolver = EngineeringPolicyResolver()
 
+        verification_strategy_resolver = VerificationStrategyResolver()
+
+        verification_strategy_guard = VerificationStrategyGuard()
+
         coding_agent = ReadOnlyCodingAgent(model=text_model)
+
+        execution_obligation_gate = ExecutionObligationGate()
 
         verification_repair_service = VerificationRepairService(model=text_model)
 
@@ -366,7 +412,7 @@ class FullExecutionBenchmarkService:
         ] = set()
 
         try:
-            for task in topological_sort_tasks(task_plan):
+            for task in topological_sort_tasks(execution_task_plan):
                 # ==================================
                 # Investigation
                 # ==================================
@@ -414,12 +460,13 @@ class FullExecutionBenchmarkService:
 
                     if verification_key in completed_final_verification_keys:
                         task_record = FullExecutionTaskRecord(
-                            task_id=task.task_id,
-                            task_type=task.task_type,
-                            status=("skipped_redundant_verification"),
-                            base_commit_sha=current_sha,
-                            context_revision=current_sha,
-                            planned_verification=(final_plan),
+                            task_id=(task.task_id),
+                            task_type=(task.task_type),
+                            coalesced_task_ids=(
+                                compression.coalesced_task_ids_for_leader(task.task_id)
+                            ),
+                            status="failed",
+                            base_commit_sha=(current_sha),
                         )
 
                         task_records.append(task_record)
@@ -569,8 +616,11 @@ class FullExecutionBenchmarkService:
                     )
 
                 task_record = FullExecutionTaskRecord(
-                    task_id=(task.task_id),
-                    task_type=(task.task_type),
+                    task_id=task.task_id,
+                    task_type=task.task_type,
+                    coalesced_task_ids=(
+                        compression.coalesced_task_ids_for_leader(task.task_id)
+                    ),
                     status="failed",
                     base_commit_sha=(current_sha),
                 )
@@ -704,9 +754,9 @@ class FullExecutionBenchmarkService:
                     # ==================================
 
                     surface = await run_coordinator.resolve_change_surface(
-                        bundle=(base_bundle),
-                        selection=(selection),
-                        task_plan=(task_plan),
+                        bundle=base_bundle,
+                        selection=selection,
+                        task_plan=(execution_task_plan),
                     )
 
                     task_record = task_record.model_copy(
@@ -851,7 +901,7 @@ class FullExecutionBenchmarkService:
                         selection=(selection),
                         surface=(execution_surface),
                         engineering_rules=(engineering_rules),
-                        task_plan=(task_plan),
+                        task_plan=(execution_task_plan),
                     )
 
                     # ==================================
@@ -868,10 +918,73 @@ class FullExecutionBenchmarkService:
                     # 两者严格分离。
                     # ==================================
 
+                    # ==================================
+                    # v1.3D
+                    #
+                    # Verification Capability-aware
+                    # Test Layer Selection
+                    # ==================================
+
+                    verification_strategy: VerificationStrategyPlan | None = None
+
+                    if task.task_type == "test":
+                        verification_strategy = verification_strategy_resolver.resolve(
+                            repository_root=(analysis_root),
+                            task=task,
+                            repository=(current_repository),
+                            code_context=(bundle.code_context),
+                            execution_surface=(execution_surface),
+                            requirement_acceptance_criteria=(
+                                requirement.acceptance_criteria
+                            ),
+                            technical_testing_strategy=(
+                                technical_spec.testing_strategy
+                            ),
+                        )
+
+                        # Coding Agent 消费的是
+                        # TaskContextBundle，
+                        # 所以 Strategy 必须成为
+                        # Context Artifact。
+                        bundle = bundle.model_copy(
+                            deep=True,
+                            update={
+                                "verification_strategy": (
+                                    verification_strategy.model_dump(mode="json")
+                                )
+                            },
+                        )
+
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "verification_strategy": (
+                                    verification_strategy.model_dump(mode="json")
+                                )
+                            },
+                        )
+
                     effective_policy = policy_resolver.resolve(
                         task=task,
                         project_rules=list(bundle.engineering_rules),
                     )
+
+                    # ==================================
+                    # Runtime-derived Policy
+                    #
+                    # Project Policy：
+                    #   长期工程规范
+                    #
+                    # Verification Strategy Policy：
+                    #   当前 Revision / 当前 Runtime
+                    #   推导出的动态 Proof Constraint
+                    # ==================================
+
+                    if verification_strategy is not None:
+                        effective_policy = merge_effective_policy(
+                            effective_policy,
+                            (verification_strategy.to_policy_rules()),
+                        )
 
                     task_record = task_record.model_copy(
                         deep=True,
@@ -950,6 +1063,45 @@ class FullExecutionBenchmarkService:
                             surface=(execution_surface),
                         )
 
+                    # ==================================
+                    # v1.3C
+                    #
+                    # Compressed Execution
+                    # Obligation Gate
+                    #
+                    # Compression 可以减少
+                    # Runtime Task 数量，
+                    # 但不能丢掉 Logical Task
+                    # 的执行义务。
+                    # ==================================
+
+                    obligation_decision = execution_obligation_gate.evaluate(
+                        task=task,
+                        analysis=analysis,
+                    )
+
+                    if not (obligation_decision.allowed):
+                        raise (
+                            FullExecutionBenchmarkError(
+                                "ExecutionObligation"
+                                "Incomplete: " + " | ".join(obligation_decision.reasons)
+                            )
+                        )
+
+                    task_record = task_record.model_copy(
+                        deep=True,
+                        update={
+                            "expected_execution_obligation_ids": (
+                                obligation_decision.expected_obligation_ids
+                            ),
+                            "satisfied_execution_obligation_ids": (
+                                obligation_decision.satisfied_obligation_ids
+                            ),
+                            "unresolved_execution_obligation_ids": (
+                                obligation_decision.unresolved_obligation_ids
+                            ),
+                        },
+                    )
                     # ==================================
                     # Publish Final Analysis
                     #
@@ -1050,14 +1202,28 @@ class FullExecutionBenchmarkService:
                     )
 
                     try:
-                        proposal = await PatchGenerator(
+                        strategy_generation = await VerificationStrategyPatchGenerator(
                             repository_root=(analysis_root),
                             model=text_model,
+                            guard=(verification_strategy_guard),
+                            max_corrections=1,
                         ).generate(
                             artifact=artifact,
                             plan=patch_plan,
                             preparation=preparation,
                             effective_policy=(effective_policy),
+                            strategy=(verification_strategy),
+                        )
+
+                        proposal = strategy_generation.proposal
+
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                ("test_strategy_" "proposal_correction_count"): (
+                                    strategy_generation.correction_count
+                                ),
+                            },
                         )
 
                     except PatchGenerationNoop as noop:
@@ -1517,6 +1683,21 @@ class FullExecutionBenchmarkService:
                                     surface=(execution_surface),
                                 )
 
+                                # ==================================
+                                # v1.3D
+                                #
+                                # Repair 同样不能通过
+                                # 换一种不可观察的 Proof Strategy
+                                # 绕过失败。
+                                # ==================================
+
+                                strategy_repair_decision = (
+                                    verification_strategy_guard.evaluate(
+                                        strategy=(verification_strategy),
+                                        proposal=(candidate_proposal),
+                                    )
+                                )
+
                                 if not (repair_decision.allowed):
                                     raise (
                                         FullExecutionBenchmarkError(
@@ -1561,7 +1742,10 @@ class FullExecutionBenchmarkService:
                                 # Workspace 的 Repair Proposal。
                                 # ==================================
 
-                                if integrity_result.allowed:
+                                if (
+                                    strategy_repair_decision.allowed
+                                    and integrity_result.allowed
+                                ):
                                     repaired_proposal = candidate_proposal
 
                                     break
@@ -1580,15 +1764,43 @@ class FullExecutionBenchmarkService:
                                 # - 继续创建 Workspace
                                 # ==================================
 
+                                # ==================================
+                                # Correction Budget Exhausted
+                                #
+                                # Strategy Guard / Integrity Guard
+                                # 任意一个仍失败，
+                                # 并且已经没有 Correction Budget，
+                                # 必须 Fail Closed。
+                                # ==================================
+
                                 if (
                                     correction_attempt
                                     >= MAX_REPAIR_PROPOSAL_CORRECTIONS
                                 ):
+
+                                    violation_messages: list[str] = []
+
+                                    if not (strategy_repair_decision.allowed):
+                                        violation_messages.append(
+                                            (
+                                                "VerificationStrategy: "
+                                                + strategy_repair_decision.format_message()
+                                            )
+                                        )
+
+                                    if not (integrity_result.allowed):
+                                        violation_messages.append(
+                                            (
+                                                "VerificationIntegrity: "
+                                                + integrity_result.format_message()
+                                            )
+                                        )
+
                                     raise (
                                         FullExecutionBenchmarkError(
                                             "VerificationRepair"
-                                            "IntegrityViolation: "
-                                            + integrity_result.format_message()
+                                            "CorrectionExhausted: "
+                                            + " | ".join(violation_messages)
                                         )
                                     ) from exc
 
@@ -1608,14 +1820,35 @@ class FullExecutionBenchmarkService:
                                 # Harness 明确告诉它。
                                 # ==================================
 
-                                correction_feedback = [
+                                correction_feedback = []
+
+                                # ----------------------------------
+                                # Verification Strategy Violations
+                                # ----------------------------------
+
+                                correction_feedback.extend(
                                     VerificationRepairCorrectionFeedback(
-                                        code=(violation.code),
+                                        code=violation.code,
+                                        relative_path=(violation.relative_path),
+                                        message=(violation.message),
+                                    )
+                                    for violation in (
+                                        strategy_repair_decision.violations
+                                    )
+                                )
+
+                                # ----------------------------------
+                                # Verification Integrity Violations
+                                # ----------------------------------
+
+                                correction_feedback.extend(
+                                    VerificationRepairCorrectionFeedback(
+                                        code=violation.code,
                                         relative_path=(violation.relative_path),
                                         message=(violation.message),
                                     )
                                     for violation in integrity_result.violations
-                                ]
+                                )
 
                             # ==================================
                             # Defensive Invariant

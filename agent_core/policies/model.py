@@ -18,6 +18,10 @@ PolicySource = Literal[
     "core_default",
     "project",
     "organization",
+    # Current Repository /
+    # Runtime Evidence 动态生成，
+    # 不是组织或项目静态规范。
+    "runtime",
 ]
 
 

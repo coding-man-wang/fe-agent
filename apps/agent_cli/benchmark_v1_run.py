@@ -241,11 +241,9 @@ async def main():
             max_total_chars=40_000,
             max_chars_per_file=10_000,
         )
-        bundle = (
-            coordinator.attach_upstream_artifacts(
-                bundle=bundle,
-                task_plan=record.task_plan,
-            )
+        bundle = coordinator.attach_upstream_artifacts(
+            bundle=bundle,
+            task_plan=record.task_plan,
         )
         print_graph_context_diagnostics(
             task_id=task.task_id,
@@ -295,6 +293,10 @@ async def main():
 
     evaluation = ChangeSurfaceEvaluator().evaluate(case=case, surface=combined)
 
+    repository_aware_plan = coordinator.replan(
+        task_plan=(record.task_plan),
+        repository_revision=(record.base_commit_sha),
+    )
     print("=== Retrieval Evaluation ===")
     print(record.retrieval_evaluation.model_dump_json(indent=2))
     print("=== Resolved Change Surface ===")
@@ -302,6 +304,9 @@ async def main():
     print("=== Change Surface Evaluation ===")
     print(evaluation.model_dump_json(indent=2))
     print(f"run_id={record.run_id}")
+    print("=== Repository-aware " "Task Plan ===")
+
+    print(repository_aware_plan.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

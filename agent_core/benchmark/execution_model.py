@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,9 @@ from agent_core.codebase.impact import (
 )
 from agent_core.benchmark.impact_verification import (
     ImpactVerificationPlan,
+)
+from agent_core.benchmark.execution_plan import (
+    ExecutionPlanCompressionSummary,
 )
 
 TaskExecutionStatus = Literal[
@@ -59,6 +62,11 @@ class FullExecutionTaskRecord(BaseModel):
     task_id: str
 
     task_type: str
+
+    coalesced_task_ids: list[str] = Field(
+        default_factory=list,
+        description=("当前 Runtime Execution Task " "同时覆盖的其他 Logical Task IDs"),
+    )
 
     status: TaskExecutionStatus
 
@@ -125,6 +133,12 @@ class FullExecutionTaskRecord(BaseModel):
 
     error: str | None = None
 
+    expected_execution_obligation_ids: list[str] = Field(default_factory=list)
+
+    satisfied_execution_obligation_ids: list[str] = Field(default_factory=list)
+
+    unresolved_execution_obligation_ids: list[str] = Field(default_factory=list)
+
 
 class FullExecutionEvaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -171,6 +185,7 @@ class FullExecutionRunRecord(BaseModel):
     baseline_run_id: str
     case_id: str
     base_commit_sha: str
+    execution_plan_compression: ExecutionPlanCompressionSummary | None = None
     final_commit_sha: str | None = None
     final_workspace_root: str | None = None
     status: Literal["running", "completed", "failed"] = "running"
@@ -180,3 +195,13 @@ class FullExecutionRunRecord(BaseModel):
     hidden_acceptance: PatchVerificationResult | None = None
     evaluation: FullExecutionEvaluation | None = None
     error: str | None = None
+    # ==================================
+    # v1.3D Verification Strategy
+    # ==================================
+
+    verification_strategy: dict[str, Any] | None = None
+
+    test_strategy_proposal_correction_count: int = Field(
+        default=0,
+        ge=0,
+    )

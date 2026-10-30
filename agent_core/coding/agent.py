@@ -28,6 +28,23 @@ class CodingOutputError(ValueError):
     """模型输出不符合 Coding Proposal 契约。"""
 
 
+class CodingEvidenceError(CodingOutputError):
+    """
+    Finding 引用的 evidence
+    无法被对应 Code Context 证明。
+
+    这是一个可进行一次
+    Bounded Evidence Correction
+    的窄错误类型。
+
+    注意：
+    - 文件不在 Context 中，不属于此错误；
+    - Scope 越界，不属于此错误；
+    - task_id 错误，不属于此错误；
+    - proposed change 非法，不属于此错误。
+    """
+
+
 class ReadOnlyCodingAgent:
     OUTPUT_INSTRUCTION = """
 请只返回一个合法 JSON 对象，不要使用 Markdown 代码围栏。
@@ -68,6 +85,16 @@ JSON 必须符合以下结构：
     }
   ],
   "execution_status": "not_executed"
+  "obligation_coverage": [
+      {
+        "obligation_id": "TASK-005",
+        "status": "addressed_by_proposed_change",
+        "related_paths": [
+          "src/views/OrdersView.vue"
+        ],
+        "reason": "本次 proposal 将实现该 Logical Task 对应责任"
+      }
+    ]
 }
 
 要求：
@@ -187,6 +214,59 @@ JSON 必须符合以下结构：
     应返回：
     proposed_changes = []
     并且不要为了执行原计划而重复修改代码。
+23. 如果 task.execution_obligations 非空，
+    obligation_coverage 必须逐项覆盖所有 obligation。
+
+24. 每个 execution_obligation 必须且只能返回一次。
+
+25. status=satisfied_by_current_code：
+    related_paths 必须引用当前 Code Context
+    中真实存在的文件，并且 findings 必须包含
+    至少一个对应路径的源码 Evidence。
+
+26. status=addressed_by_proposed_change：
+    related_paths 必须属于 proposed_changes。
+
+27. status=unresolved：
+    表示当前 Execution Unit 无法安全证明
+    该 Logical Task 已经得到处理。
+    Harness 会阻止进入 Patch。
+
+28. 禁止因为多个 execution_obligations
+    修改同一个文件，就只覆盖其中一个 obligation。
+
+29. execution_obligations 描述的是
+    “必须完成什么”，
+    Change Surface 仍决定
+    “当前允许修改什么”。
+
+30. 不得通过扩大 proposed_changes
+    来满足 execution_obligations；
+    所有修改仍必须严格位于
+    Change Surface writable boundary 内。
+31. 如果当前 Task 是 test，
+    并且 verification_strategy 不为空，
+    proposed_changes / proposed_approach
+    必须遵守 verification_strategy。
+
+32. 对 routing_action=required_here 的 Proof：
+    当前测试方案应该明确覆盖。
+
+33. 对 routing_action=deferred 的 Proof：
+    不得为了当前 Test Task 看起来完整，
+    在不可观察的 Test Layer 中伪造 Proof Strategy。
+
+34. verification_strategy.forbidden_strategies
+    中声明的能力不能进入 proposed_approach。
+
+35. 如果当前 E2E Runtime Path 是 local_mock，
+    不得因为源码中还存在 Remote 分支，
+    就假设 Browser 当前一定会发送 Remote HTTP Request。
+
+36. “当前层不可观察”
+    不是 blocking coding evidence gap。
+    这是 Proof Routing 问题，
+    不应该阻塞当前层对其他可观察行为的测试实现。
 """.strip()
 
     RUNTIME_RECONCILIATION_REVIEW_INSTRUCTION = """
@@ -427,6 +507,201 @@ JSON 必须符合以下结构：
         )
 
     @staticmethod
+    def _validate_evidence_correction_boundary(
+        *,
+        original: ReadOnlyCodingResult,
+        corrected: ReadOnlyCodingResult,
+    ) -> None:
+        """
+        Evidence Correction 不是第二次
+        Coding Analysis。
+
+        唯一允许变化的是：
+
+            findings[*].evidence
+
+        其他业务判断必须保持不变。
+
+        这样可以避免模型利用
+        “纠正证据”偷偷进行：
+
+        - Replan
+        - Scope Expansion
+        - 删除 Change
+        - 修改 Evidence Gap
+        - 修改 Verification Plan
+        """
+
+        if original.task_id != corrected.task_id:
+            raise CodingOutputError("Evidence Correction " "不得修改 task_id")
+
+        if original.summary != corrected.summary:
+            raise CodingOutputError("Evidence Correction " "不得修改 summary")
+
+        if len(original.findings) != len(corrected.findings):
+            raise CodingOutputError("Evidence Correction " "不得增加或删除 Finding")
+
+        for index, (
+            original_finding,
+            corrected_finding,
+        ) in enumerate(
+            zip(
+                original.findings,
+                corrected.findings,
+                strict=True,
+            )
+        ):
+            if original_finding.relative_path != corrected_finding.relative_path:
+                raise CodingOutputError(
+                    "Evidence Correction "
+                    "不得修改 Finding 文件路径; "
+                    f"index={index}"
+                )
+
+            if original_finding.explanation != corrected_finding.explanation:
+                raise CodingOutputError(
+                    "Evidence Correction " "不得修改 Finding 结论; " f"index={index}"
+                )
+
+        if original.proposed_changes != corrected.proposed_changes:
+            raise CodingOutputError("Evidence Correction " "不得修改 proposed_changes")
+
+        if original.verification_plan != corrected.verification_plan:
+            raise CodingOutputError("Evidence Correction " "不得修改 verification_plan")
+
+        if original.missing_information != corrected.missing_information:
+            raise CodingOutputError(
+                "Evidence Correction " "不得修改 missing_information"
+            )
+
+        if original.evidence_gaps != corrected.evidence_gaps:
+            raise CodingOutputError("Evidence Correction " "不得修改 evidence_gaps")
+
+        if original.execution_status != corrected.execution_status:
+            raise CodingOutputError("Evidence Correction " "不得修改 execution_status")
+
+    async def _repair_invalid_evidence(
+        self,
+        *,
+        messages: RenderedContext,
+        previous_result: ReadOnlyCodingResult,
+        evidence_error: CodingEvidenceError,
+    ) -> str:
+        """
+        对已经通过 Schema Validation、
+        但 Evidence Authenticity Validation
+        失败的结果进行一次有限纠正。
+
+        这里只修 findings.evidence。
+
+        不允许：
+        - 改业务判断；
+        - 改 proposed_changes；
+        - 改 Scope；
+        - 增删 Finding；
+        - 改 Finding path / explanation。
+        """
+
+        previous_json = previous_result.model_dump_json(indent=2)
+
+        correction_instruction = f"""
+    你正在执行一次：
+
+    Bounded Evidence Correction
+
+    上一轮 Coding Analysis 的 JSON
+    已经通过 Schema 校验，
+
+    但是其中至少一个：
+
+        findings[*].evidence
+
+    无法在对应的 Code Context 中找到。
+
+    这意味着：
+
+        分析结果的结构合法，
+        但源码引用不真实或不精确。
+
+    你的任务不是重新分析代码。
+
+    你只允许纠正：
+
+        findings[*].evidence
+
+    硬性规则：
+
+    1. 必须返回完整 JSON 对象。
+
+    2. findings 数量不能变化。
+
+    3. findings 顺序不能变化。
+
+    4. relative_path 不能变化。
+
+    5. explanation 不能变化。
+
+    6. summary 不能变化。
+
+    7. proposed_changes 不能变化。
+
+    8. verification_plan 不能变化。
+
+    9. missing_information 不能变化。
+
+    10. evidence_gaps 不能变化。
+
+    11. execution_status 不能变化。
+
+    12. task_id 不能变化。
+
+    13. 唯一允许修改的字段是：
+
+            findings[*].evidence
+
+    14. evidence 必须直接复制自
+        对应 relative_path 的
+        code_context.content。
+
+    15. 优先引用：
+
+        - 单行代码；
+        - 短小片段；
+        - 稳定源码；
+        - 能直接支持原 explanation
+          的最小证据。
+
+    16. 不得：
+        - 猜测代码；
+        - 改变量名；
+        - 改字符串；
+        - 使用 ...；
+        - 翻译源码；
+        - 根据记忆补全源码。
+
+    17. 如果无法找到能支持原 Finding
+        的真实 Evidence：
+
+        不允许修改 Finding 结论来绕过校验。
+
+        返回结果仍必须保持原 Decision。
+        Harness 会再次校验并 Fail Closed。
+
+    上一轮 Evidence Validation Error：
+
+    {str(evidence_error)}
+
+    上一轮结构化结果：
+
+    {previous_json}
+    """.strip()
+
+        return await self.model.complete(
+            system_message=(messages.system_message + "\n\n" + correction_instruction),
+            user_message=(messages.user_message),
+        )
+
+    @staticmethod
     def _parse_result(
         raw_output: str,
     ) -> ReadOnlyCodingResult:
@@ -484,7 +759,7 @@ JSON 必须符合以下结构：
                 if len(evidence_preview) > 180:
                     evidence_preview = evidence_preview[:180] + "..."
 
-                raise CodingOutputError(
+                raise CodingEvidenceError(
                     "Finding 的 evidence "
                     "不存在于对应代码上下文: "
                     f"{finding.relative_path}; "
@@ -550,6 +825,108 @@ JSON 必须符合以下结构：
                 continue
 
             raise CodingOutputError("未知 proposed change " f"action: {change.action}")
+        # ==================================
+        # Execution Obligation Coverage
+        # ==================================
+
+        obligations = list(
+            getattr(
+                bundle.task,
+                "execution_obligations",
+                [],
+            )
+        )
+
+        if not obligations:
+
+            if result.obligation_coverage:
+                raise CodingOutputError(
+                    "当前 Task 不存在 "
+                    "execution_obligations，"
+                    "但模型返回了 "
+                    "obligation_coverage"
+                )
+
+            return
+
+        expected_ids = [item.obligation_id for item in obligations]
+
+        actual_ids = [item.obligation_id for item in result.obligation_coverage]
+
+        if len(actual_ids) != len(set(actual_ids)):
+            raise CodingOutputError("obligation_coverage " "存在重复 obligation_id")
+
+        missing_ids = sorted(set(expected_ids) - set(actual_ids))
+
+        unexpected_ids = sorted(set(actual_ids) - set(expected_ids))
+
+        if missing_ids:
+            raise CodingOutputError(
+                "Execution Obligation "
+                "Coverage 不完整，缺少: " + ", ".join(missing_ids)
+            )
+
+        if unexpected_ids:
+            raise CodingOutputError(
+                "obligation_coverage "
+                "包含未知 obligation: " + ", ".join(unexpected_ids)
+            )
+
+        finding_paths = {finding.relative_path for finding in result.findings}
+
+        proposed_paths = {change.relative_path for change in result.proposed_changes}
+
+        for coverage in result.obligation_coverage:
+
+            if coverage.status == "satisfied_by_current_code":
+
+                if not coverage.related_paths:
+                    raise CodingOutputError(
+                        f"{coverage.obligation_id} "
+                        "声明当前代码已满足，"
+                        "但没有提供 related_paths"
+                    )
+
+                invalid_paths = set(coverage.related_paths) - finding_paths
+
+                if invalid_paths:
+                    raise CodingOutputError(
+                        f"{coverage.obligation_id} "
+                        "声明当前代码已满足，"
+                        "但以下路径没有 "
+                        "Finding Evidence: " + ", ".join(sorted(invalid_paths))
+                    )
+
+                continue
+
+            if coverage.status == ("addressed_by_" "proposed_change"):
+
+                if not coverage.related_paths:
+                    raise CodingOutputError(
+                        f"{coverage.obligation_id} "
+                        "声明由 proposed change "
+                        "完成，但 related_paths "
+                        "为空"
+                    )
+
+                invalid_paths = set(coverage.related_paths) - proposed_paths
+
+                if invalid_paths:
+                    raise CodingOutputError(
+                        f"{coverage.obligation_id} "
+                        "引用了不属于 "
+                        "proposed_changes "
+                        "的路径: " + ", ".join(sorted(invalid_paths))
+                    )
+
+                continue
+
+            if coverage.status == "unresolved":
+                continue
+
+            raise CodingOutputError(
+                "未知 Execution Obligation " "Coverage Status: " f"{coverage.status}"
+            )
 
     def prepare_messages(
         self,
@@ -621,10 +998,93 @@ JSON 必须符合以下结构：
                     f"output={output_preview!r}"
                 ) from second_error
 
-        self._validate_result(
-            bundle=bundle,
-            result=result,
-        )
+        # ==================================
+        # Evidence Authenticity Boundary
+        #
+        # Schema 合法
+        # !=
+        # Repository Evidence 真实
+        #
+        # 第一次 Evidence 不合法时，
+        # 只允许进行一次
+        # Bounded Evidence Correction。
+        # ==================================
+
+        try:
+            self._validate_result(
+                bundle=bundle,
+                result=result,
+            )
+
+        except CodingEvidenceError as first_error:
+
+            corrected_output = await self._repair_invalid_evidence(
+                messages=messages,
+                previous_result=result,
+                evidence_error=first_error,
+            )
+
+            # ------------------------------
+            # Evidence Correction
+            # 仍然必须重新经过 Schema。
+            #
+            # 这里不再进行第二层
+            # Schema Repair，
+            # 防止 Correction Chain
+            # 无限扩张。
+            # ------------------------------
+
+            try:
+                corrected_result = self._parse_result(corrected_output)
+
+            except ValidationError as exc:
+
+                error_details = self._format_validation_errors(exc)
+
+                raise CodingOutputError(
+                    "Evidence Correction " "返回了非法结构; " f"errors={error_details}"
+                ) from exc
+
+            # ------------------------------
+            # Correction Integrity Guard
+            #
+            # Evidence Correction
+            # 只能改变引用文本，
+            # 不能改变 Coding Decision。
+            # ------------------------------
+
+            self._validate_evidence_correction_boundary(
+                original=result,
+                corrected=corrected_result,
+            )
+
+            # ------------------------------
+            # 再次执行完整 Validation。
+            #
+            # 不仅重新检查 Evidence，
+            # 也重新检查：
+            #
+            # - task_id
+            # - Change Surface
+            # - modify/create
+            # - writable scope
+            # ------------------------------
+
+            try:
+                self._validate_result(
+                    bundle=bundle,
+                    result=corrected_result,
+                )
+
+            except CodingEvidenceError as second_error:
+
+                raise CodingOutputError(
+                    "Bounded Evidence Correction "
+                    "后 Evidence 仍然不真实: "
+                    f"{second_error}"
+                ) from second_error
+
+            result = corrected_result
 
         return result
 

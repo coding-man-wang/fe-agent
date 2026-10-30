@@ -85,6 +85,65 @@ class FakeSemanticSearcher:
         )
 
 
+class ChangeSurfaceAwareContextFactory:
+    """
+    测试适配器。
+
+    DefaultTaskContextFactory 负责构建
+    Retrieval / Code Context，
+
+    当前测试再模拟已经由上游
+    Investigation + Change Surface
+    确认：
+
+        src/api/user.ts
+
+    是当前 Task 的合法写目标。
+
+    注意：
+    这不是从 Retrieval 推导写权限，
+    而是显式模拟上游 Artifact。
+    """
+
+    def __init__(
+        self,
+        delegate,
+    ):
+        self.delegate = delegate
+
+    async def build(
+        self,
+        task,
+    ):
+        bundle = await self.delegate.build(task)
+
+        return bundle.model_copy(
+            deep=True,
+            update={
+                "change_surface": {
+                    "task_id": task.task_id,
+                    "implementation_targets": [
+                        "src/api/user.ts",
+                    ],
+                    "dependencies": [],
+                    "references": [],
+                    "tests": [],
+                    "create_files": [],
+                    "unresolved": [],
+                    "rationale": [
+                        (
+                            "测试夹具模拟上游 "
+                            "Change Surface 已确认 "
+                            "src/api/user.ts "
+                            "为当前 writable target"
+                        )
+                    ],
+                    "execution_disposition": "change_required",
+                }
+            },
+        )
+
+
 class FakeCodingModel:
     """
     Fake 的不是 CodingAgent，
@@ -244,7 +303,7 @@ async def test_analysis_workflow_end_to_end(
     # 3. 真实 Context Factory
     # ------------------------------------------------
 
-    context_factory = DefaultTaskContextFactory(
+    base_context_factory = DefaultTaskContextFactory(
         repository_root=tmp_path,
         requirement=(create_requirement()),
         technical_spec=(create_technical_spec()),
@@ -263,12 +322,14 @@ async def test_analysis_workflow_end_to_end(
             StaticContextBudgetProvider(
                 ContextBudgetConfig(
                     max_files=5,
-                    max_total_chars=(20_000),
-                    max_chars_per_file=(8_000),
+                    max_total_chars=20_000,
+                    max_chars_per_file=8_000,
                 )
             )
         ),
     )
+
+    context_factory = ChangeSurfaceAwareContextFactory(base_context_factory)
 
     # ------------------------------------------------
     # 4. 真实 ReadOnlyCodingAgent
@@ -314,7 +375,7 @@ async def test_analysis_workflow_end_to_end(
 
     assert record is not None
 
-    assert record.status == "succeeded"
+    assert record.status == "succeeded", record.error
 
     assert record.result is not None
 

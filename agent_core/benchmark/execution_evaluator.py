@@ -50,7 +50,7 @@ class FullExecutionEvaluator:
 
         observed_impact_set: set[str] = set()
 
-        observed_verification_set: set[str] = set()
+        observed_impact_verification_set: set[str] = set()
 
         for task_record in task_records:
 
@@ -58,18 +58,42 @@ class FullExecutionEvaluator:
 
             if impact is not None:
                 observed_impact_set.update(
-                    item.relative_path for item in impact.affected_production_files
+                    item.relative_path for item in (impact.affected_production_files)
                 )
 
                 observed_impact_set.update(
-                    item.relative_path for item in impact.affected_test_files
+                    item.relative_path for item in (impact.affected_test_files)
                 )
 
                 observed_impact_set.update(impact.suggested_test_files)
 
-            observed_verification_set.update(
-                task_record.executed_verification_command_ids
-            )
+            # =====================================
+            # Impact Verification Coverage
+            #
+            # 这里验证的是：
+            #
+            # Impact Analysis 是否让
+            # Verification Planner
+            # 安排了 Oracle 要求的验证。
+            #
+            # 所以 Source of Truth 是：
+            #
+            # planned_verification.final_command_ids
+            #
+            # 而不是当前生命周期阶段
+            # 实际执行了哪些命令。
+            #
+            # planned != scheduled != executed
+            # =====================================
+
+            planned_verification = task_record.planned_verification
+
+            if planned_verification is not None:
+                (
+                    observed_impact_verification_set.update(
+                        planned_verification.final_command_ids
+                    )
+                )
 
         allowed = sorted(set(oracle.allowed_change_files))
         forbidden = sorted(set(oracle.forbidden_change_files))
@@ -93,10 +117,6 @@ class FullExecutionEvaluator:
         )
         completed = [record for record in task_records if record.status == "completed"]
 
-        completed_verification_tasks = [
-            record for record in completed if (record.task_type == "verification")
-        ]
-
         verified_tasks = [
             record
             for record in completed
@@ -108,9 +128,10 @@ class FullExecutionEvaluator:
             }
         ]
 
-        verification_passed = bool(completed_verification_tasks) and all(
+        verification_passed = bool(verified_tasks) and all(
             record.verification_status == "succeeded" for record in verified_tasks
         )
+
         hidden_passed = (
             hidden_acceptance is not None and hidden_acceptance.status == "passed"
         )
@@ -131,12 +152,12 @@ class FullExecutionEvaluator:
             set(impact_oracle.required_verification_command_ids)
         )
 
-        observed_verification_commands = sorted(observed_verification_set)
+        observed_verification_commands = sorted(observed_impact_verification_set)
 
         missing_impact_commands = [
             command_id
             for command_id in required_impact_commands
-            if command_id not in observed_verification_set
+            if command_id not in (observed_impact_verification_set)
         ]
 
         impact_coverage_passed = not missed_impacts

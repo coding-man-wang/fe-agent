@@ -592,13 +592,81 @@ class RetrievalQueryBuilder:
 
         result: list[RetrievalQuery] = []
 
-        # Task 自身表达
-        # 先于 target_modules。
-        #
-        # 避免过度依赖 Planner
-        # 猜出来的模块路径。
-
         default_intent = self._default_task_intent(task)
+
+        # ==================================
+        # 1. Logical Responsibilities
+        #
+        # v1.3 的主要 Task Retrieval Signal。
+        #
+        # 它描述：
+        #   “需要解决什么责任”
+        #
+        # 而不是：
+        #   “猜哪个文件”
+        # ==================================
+
+        for responsibility in task.responsibilities:
+
+            text = responsibility.strip()
+
+            if not text:
+                continue
+
+            result.append(
+                RetrievalQuery(
+                    text=text,
+                    sources=["task"],
+                    kinds=["text"],
+                    intents=(
+                        self._infer_text_intents(
+                            text=text,
+                            default_intent=(default_intent),
+                        )
+                    ),
+                )
+            )
+
+        # ==================================
+        # 2. Investigation Agenda
+        #
+        # 调查问题本身就是很好的
+        # Retrieval Query。
+        # ==================================
+
+        for question in task.investigation_questions:
+
+            text = question.strip()
+
+            if not text:
+                continue
+
+            intents: list[RetrievalIntent] = [
+                "dependency_context",
+            ]
+
+            if task.task_type in {
+                "investigation",
+                "code_change",
+            }:
+                intents.append("implementation_location")
+
+            result.append(
+                RetrievalQuery(
+                    text=text,
+                    sources=["task"],
+                    kinds=["text"],
+                    intents=intents,
+                )
+            )
+
+        # ==================================
+        # 3. Task Summary Fallback
+        #
+        # 保留 title / objective，
+        # 避免旧 Plan 或非常短的 Logical
+        # Plan 丢失检索能力。
+        # ==================================
 
         for candidate in [
             task.title,
@@ -615,16 +683,30 @@ class RetrievalQueryBuilder:
                     text=text,
                     sources=["task"],
                     kinds=["text"],
-                    intents=self._infer_text_intents(
-                        text=text,
-                        default_intent=default_intent,
+                    intents=(
+                        self._infer_text_intents(
+                            text=text,
+                            default_intent=(default_intent),
+                        )
                     ),
                 )
             )
 
-        for module in task.target_modules:
+        # ==================================
+        # 4. Repository Hint
+        #
+        # 新 Plan:
+        #   repository_hints
+        #
+        # 旧 Frozen Plan:
+        #   target_modules
+        #
+        # 统一从 Compatibility API 获取。
+        # ==================================
 
-            text = module.strip()
+        for hint in task.repository_search_hints():
+
+            text = hint.strip()
 
             if not text:
                 continue
@@ -639,6 +721,10 @@ class RetrievalQueryBuilder:
                     ],
                 )
             )
+
+        # ==================================
+        # 5. Workflow Inputs
+        # ==================================
 
         for task_input in task.inputs:
 

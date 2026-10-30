@@ -5,7 +5,11 @@ from agent_core.artifacts.store import JsonTaskArtifactStore
 from agent_core.change_surface.context_builder import ResolvedTaskContextBuilder
 from agent_core.change_surface.context_policy import RoleAwareContextPolicy
 from agent_core.change_surface.investigation import InvestigationArtifactBuilder
-from agent_core.change_surface.model import InvestigationArtifact, ResolvedChangeSurface
+from agent_core.change_surface.model import (
+    InvestigationArtifact,
+    RepositoryAwareTask,
+    ResolvedChangeSurface,
+)
 from agent_core.change_surface.replan import RepositoryAwareReplanner
 from agent_core.change_surface.resolver import ChangeSurfaceResolver
 from agent_core.change_surface.scope_guard import PatchScopeGuard
@@ -250,19 +254,71 @@ class HarnessV1Coordinator:
         )
         return decision
 
-    def replan(self, *, task_plan: TaskPlan):
-        replanner = RepositoryAwareReplanner(artifact_resolver=self.artifact_resolver)
-        plan = replanner.build(task_plan=task_plan)
+    def replan(
+        self,
+        *,
+        task_plan: TaskPlan,
+        repository_revision: str | None = None,
+    ):
+
+        replanner = RepositoryAwareReplanner(artifact_resolver=(self.artifact_resolver))
+
+        plan = replanner.build(
+            task_plan=task_plan,
+            repository_revision=(repository_revision),
+        )
+
+        source_task_map = {task.task_id: task for task in task_plan.tasks}
+
         for task in plan.tasks:
+
+            # ==================================
+            # Durable Replan Artifact
+            #
+            # 一个 Task 的 Repository-aware
+            # Resolution 也属于 Artifact。
+            #
+            # 相同内容重复调用保持幂等。
+            # ==================================
+
+            existing_envelope = self.store.latest(
+                task_id=task.task_id,
+                artifact_type="replan",
+            )
+
+            should_publish = True
+
+            if existing_envelope is not None:
+
+                existing = RepositoryAwareTask.model_validate(existing_envelope.payload)
+
+                if existing == task:
+                    should_publish = False
+
+            if should_publish:
+                source_task = source_task_map[task.task_id]
+
+                self.store.put_model(
+                    task_id=(task.task_id),
+                    artifact_type="replan",
+                    model=task,
+                    depends_on_task_ids=list(source_task.depends_on),
+                )
+
             self._trace(
                 task_id=task.task_id,
-                event_type="repository_replanned",
+                event_type=("repository_replanned"),
                 data={
-                    "resolution_status": task.resolution_status,
-                    "execution_disposition": task.execution_disposition,
-                    "resolved_target_files": list(task.resolved_target_files),
+                    "source_planning_stage": (task.source_planning_stage),
+                    "repository_revision": (task.repository_revision),
+                    "responsibilities": (list(task.responsibilities)),
+                    "original_repository_hints": (list(task.original_repository_hints)),
+                    "resolution_status": (task.resolution_status),
+                    "execution_disposition": (task.execution_disposition),
+                    "resolved_target_files": (list(task.resolved_target_files)),
                 },
             )
+
         return plan
 
     def record_execution(

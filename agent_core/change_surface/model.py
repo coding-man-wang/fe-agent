@@ -197,16 +197,64 @@ class RepositoryAwareTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
+
     task_type: str
+
     title: str
+
+    objective: str = ""
+
     depends_on: list[str] = Field(default_factory=list)
+
+    # ==================================
+    # Logical Plan Provenance
+    # ==================================
+
+    source_planning_stage: Literal[
+        "legacy",
+        "logical",
+    ] = "legacy"
+
+    responsibilities: list[str] = Field(default_factory=list)
+
+    investigation_questions: list[str] = Field(default_factory=list)
+
+    acceptance_criteria_refs: list[str] = Field(default_factory=list)
+
+    # ==================================
+    # Initial Repository Hints
+    #
+    # 只是前置搜索提示，
+    # 不等于 resolved targets。
+    # ==================================
+
+    original_repository_hints: list[str] = Field(default_factory=list)
+
+    # Legacy compatibility
     original_target_modules: list[str] = Field(default_factory=list)
+
+    # ==================================
+    # Evidence-resolved Repository Plan
+    # ==================================
+
     resolved_target_files: list[str] = Field(default_factory=list)
+
     dependency_files: list[str] = Field(default_factory=list)
+
     reference_files: list[str] = Field(default_factory=list)
+
     test_files: list[str] = Field(default_factory=list)
-    resolution_status: Literal["resolved", "partial", "unresolved"]
+
+    repository_revision: str | None = None
+
+    resolution_status: Literal[
+        "resolved",
+        "partial",
+        "unresolved",
+    ]
+
     execution_disposition: ExecutionDisposition | None = None
+
     reasons: list[str] = Field(default_factory=list)
 
 
@@ -214,4 +262,12 @@ class RepositoryAwareTaskPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     summary: str
+
+    source_planning_stage: Literal[
+        "legacy",
+        "logical",
+    ] = "legacy"
+
+    repository_revision: str | None = None
+
     tasks: list[RepositoryAwareTask] = Field(default_factory=list)

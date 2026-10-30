@@ -41,13 +41,33 @@ class TaskContextBundle(BaseModel):
     technical_spec: TechnicalSpec
     task: TaskDefinition
     repository: RepositoryProfile
+
     engineering_rules: list[str] = Field(default_factory=list)
+
     code_context: list[CodeContextItem] = Field(default_factory=list)
+
     budget: ContextBudgetUsage
 
-    # v1.0: 下游 Task 真正消费上游 Artifact，而不是把“TASK-001 输出”当搜索词。
     upstream_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+
     change_surface: dict[str, Any] | None = None
+
+    # ==================================
+    # v1.3D
+    #
+    # Harness-selected
+    # Verification Strategy。
+    #
+    # 只对 Test Task 使用。
+    #
+    # 使用 dict 是为了避免：
+    #
+    # context
+    # → benchmark
+    #
+    # 的反向模块依赖。
+    # ==================================
+    verification_strategy: dict[str, Any] | None = None
 
 
 class RenderedContext(BaseModel):

@@ -130,7 +130,7 @@ def test_multi_query_retrieval_evidence(
     assert user_api.retrieval_rank == 1
 
 
-def test_task_policy_prefers_target_module(
+def test_legacy_target_modules_still_produce_target_evidence(
     tmp_path: Path,
 ):
     create_test_repository(tmp_path)
@@ -163,7 +163,9 @@ def test_task_policy_prefers_target_module(
 
     assert user_api.policy_score > 0
 
-    assert any("target_modules" in reason for reason in user_api.reasons)
+    assert user_api.target_match_type == "directory"
+
+    assert user_api.target_match_value == "src/api"
 
 
 def test_non_indexable_file_is_skipped(
@@ -291,3 +293,59 @@ def test_other_category_does_not_break_policy_scoring(
     assert selected.relative_path == "data.txt"
 
     assert selected.policy_score == 0
+
+
+def test_repository_hints_produce_target_evidence(
+    tmp_path: Path,
+):
+    create_test_repository(tmp_path)
+
+    index = RepositoryFileIndexer().build(tmp_path)
+
+    task = TaskDefinition(
+        task_id="TASK-003",
+        task_type="code_change",
+        title="修改用户查询逻辑",
+        objective="实现用户列表数据访问行为",
+        source_step_order=2,
+        depends_on=[],
+        inputs=[],
+        responsibilities=["实现用户列表数据访问行为"],
+        investigation_questions=[],
+        repository_hints=["src/api"],
+        # v1.3 新 Plan
+        target_modules=[],
+        expected_outputs=["更新后的用户查询行为"],
+        verification=["用户列表正常加载"],
+        acceptance_criteria_refs=[],
+    )
+
+    responses = [
+        HybridSearchResponse(
+            query="user",
+            candidates=[
+                make_candidate("src/views/UserList.vue"),
+                make_candidate("src/api/user.ts"),
+            ],
+        )
+    ]
+
+    selection = HybridRelevantFileSelector().select(
+        index=index,
+        hybrid_responses=responses,
+        task=task,
+        max_files=10,
+        max_total_bytes=100_000,
+    )
+
+    user_api = next(
+        item
+        for item in selection.selected_files
+        if (item.relative_path == "src/api/user.ts")
+    )
+
+    assert user_api.policy_score > 0
+
+    assert user_api.target_match_type == "directory"
+
+    assert user_api.target_match_value == "src/api"

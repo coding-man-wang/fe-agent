@@ -216,7 +216,10 @@ async def _prepare_fresh(
                     {
                         "task_id": task.task_id,
                         "title": task.title,
-                        "target_modules": list(task.target_modules),
+                        "planning_stage": (baseline.task_plan.planning_stage),
+                        "responsibilities": (list(task.responsibilities)),
+                        "investigation_questions": (list(task.investigation_questions)),
+                        "repository_hints": (task.repository_search_hints()),
                         "observed_files": [
                             {
                                 "relative_path": (item.relative_path),
@@ -252,7 +255,8 @@ async def _prepare_fresh(
                     "task_id": task.task_id,
                     "task_type": task.task_type,
                     "title": task.title,
-                    "target_modules": list(task.target_modules),
+                    "responsibilities": (list(task.responsibilities)),
+                    "repository_hints": (task.repository_search_hints()),
                     "surface": (surface.model_dump(mode="json")),
                 },
                 ensure_ascii=False,
@@ -311,6 +315,14 @@ async def _prepare_fresh(
             "Change Surface 未通过；本次 fresh upstream 不会覆盖已冻结的 Prepared Input"
         )
 
+    repository_aware_plan = coordinator.replan(
+        task_plan=(baseline.task_plan),
+        repository_revision=(baseline.base_commit_sha),
+    )
+
+    print("\n=== Repository-aware " "Task Plan ===")
+
+    print(repository_aware_plan.model_dump_json(indent=2))
     prepared = PreparedExecutionInput(
         case_id=case.case_id,
         base_commit_sha=case.base_commit_sha,

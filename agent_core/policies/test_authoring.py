@@ -75,4 +75,37 @@ DEFAULT_TEST_AUTHORING_RULES = [
             "和测试文件组织模式。"
         ),
     ),
+    EngineeringRule(
+        rule_id=("TEST-CAPABILITY-001"),
+        category="test_authoring",
+        severity="must",
+        source="core_default",
+        description=(
+            "如果当前 Task Context "
+            "提供 verification_strategy，"
+            "测试只能使用该 Strategy "
+            "确认当前 Test Layer "
+            "真实具备的 Verification Capability。"
+            "不得为了覆盖某个 Requirement "
+            "伪造当前 Runtime Path "
+            "不存在的网络请求、模块能力"
+            "或 failure injection 方式。"
+        ),
+    ),
+    EngineeringRule(
+        rule_id=("TEST-PROOF-ROUTING-001"),
+        category="test_authoring",
+        severity="must",
+        source="core_default",
+        description=(
+            "Verification Obligation "
+            "不能因为当前 Test Layer "
+            "不可观察就被删除或弱化。"
+            "如果 verification_strategy "
+            "将某项 Proof 标记为 deferred，"
+            "当前层不得伪造 Proof；"
+            "应保留该 Obligation，"
+            "交给更合适的 Unit / E2E Layer。"
+        ),
+    ),
 ]

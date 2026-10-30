@@ -76,6 +76,32 @@ class ImplementationPlanGenerator:
         
         15. 只返回 JSON，不返回 Markdown。
         
+        当前 ImplementationPlan 属于
+        Pre-Investigation Planning。
+        
+        affected_modules 只表示逻辑责任区域，
+        不表示最终文件修改目标。
+        
+        actions 应描述：
+        
+        - 要完成什么行为
+        - 要确认什么责任
+        - 要满足什么 Contract
+        - 要如何验证
+        
+        不要在没有 Repository Evidence 时
+        把 actions 写成：
+        
+            修改 Xxx.vue
+            修改 foo.ts
+        
+        除非该精确路径已经由
+        ProjectContext 明确提供。
+        
+        ImplementationPlan 的职责是
+        安排实施逻辑，
+        不是提前生成 Patch Plan。
+        
         输出必须满足以下 JSON Schema：
         
         {json.dumps(schema, ensure_ascii=False)}

@@ -130,6 +130,29 @@ def create_test_bundle(
         ),
         code_context=[code_item],
         budget=budget,
+        # ==================================
+        # Modern Harness Fixture
+        #
+        # Retrieval / Code Context
+        # 不等于 Write Permission。
+        #
+        # 当前测试显式模拟：
+        # 上游 Change Surface 已经确认
+        # src/api/user.ts 是合法生产写目标。
+        # ==================================
+        change_surface={
+            "task_id": "TASK-003",
+            "implementation_targets": [
+                "src/api/user.ts",
+            ],
+            "dependencies": [],
+            "references": [],
+            "tests": [],
+            "create_files": [],
+            "unresolved": [],
+            "rationale": ["test fixture explicitly " "authorizes src/api/user.ts"],
+            "execution_disposition": "change_required",
+        },
     )
 
 
@@ -238,3 +261,26 @@ def test_rendering_is_deterministic(
 
     print(first)
     assert first == second
+
+
+def test_renderer_includes_verification_strategy(
+    tmp_path: Path,
+):
+    bundle = create_test_bundle(tmp_path)
+
+    bundle = bundle.model_copy(
+        deep=True,
+        update={
+            "verification_strategy": {
+                "task_id": "TASK-003",
+                "selected_layer": "unit",
+                "runtime_path": "local_mock",
+            }
+        },
+    )
+
+    rendered = ContextRenderer().render(bundle)
+
+    payload = json.loads(rendered.user_message)
+
+    assert payload["verification_strategy"]["selected_layer"] == "unit"

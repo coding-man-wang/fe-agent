@@ -168,3 +168,36 @@ def test_quoted_literal_can_generate_search_token():
     #
     # 所以额外保留 Page。
     assert "Page" in texts
+
+
+def test_logical_task_queries_use_responsibilities_and_questions():
+    builder = RetrievalQueryBuilder(max_queries=10)
+
+    task = TaskDefinition(
+        task_id="TASK-001",
+        task_type="investigation",
+        title="调查订单筛选",
+        objective="确认 Runtime Path",
+        source_step_order=1,
+        responsibilities=[
+            "确认筛选状态责任",
+        ],
+        investigation_questions=[
+            "订单请求在哪里传播 status？",
+        ],
+        repository_hints=[
+            "src/api",
+        ],
+    )
+
+    queries = builder.build(
+        task=task,
+    )
+
+    texts = {item.text for item in queries}
+
+    assert "确认筛选状态责任" in texts
+
+    assert "订单请求在哪里传播 status？" in texts
+
+    assert "src/api" in texts

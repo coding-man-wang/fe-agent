@@ -22,205 +22,250 @@ class FakeTaskLLM:
     ):
         return ChatResponse(
             content="""
-            {
-              "summary":
-                "将用户列表实施计划拆分为可执行任务",
+          {
+            "planning_stage": "logical",
 
-              "tasks": [
-                {
-                  "task_id": "TASK-001",
-                  "task_type": "investigation",
-                  "title": "确认用户分页 API 契约",
-                  "objective":
-                    "确认用户列表 API 的请求参数和响应结构",
+            "summary":
+              "将用户列表需求拆分为调查、实现、测试和验证责任",
 
-                  "source_step_order": 1,
+            "tasks": [
+              {
+                "task_id": "TASK-001",
+                "task_type": "investigation",
+                "title": "确认用户列表现有实现责任",
+                "objective":
+                  "确认用户分页 API、页面交互和路由相关的现有实现事实",
 
-                  "depends_on": [],
+                "source_step_order": 1,
 
-                  "inputs": [
-                    "TechnicalSpec"
-                  ],
+                "depends_on": [],
 
-                  "target_modules": [
-                    "用户 API"
-                  ],
+                "inputs": [
+                  "TechnicalSpec"
+                ],
 
-                  "expected_outputs": [
-                    "明确的用户分页 API 契约"
-                  ],
+                "responsibilities": [
+                  "确认用户分页数据访问责任",
+                  "确认用户列表页面交互责任",
+                  "确认页面与路由之间的现有关系"
+                ],
 
-                  "verification": [
-                    "确认分页参数和响应字段定义"
-                  ],
+                "investigation_questions": [
+                  "用户分页请求参数和响应结构由哪一层负责？",
+                  "用户列表页面当前由哪一层负责展示和交互？",
+                  "用户列表页面与路由之间如何关联？"
+                ],
 
-                  "acceptance_criteria_refs": []
-                },
+                "repository_hints": [
+                  "src/api",
+                  "src/views",
+                  "src/router"
+                ],
 
-                {
-                  "task_id": "TASK-002",
-                  "task_type": "code_change",
-                  "title": "实现用户 API 封装",
-                  "objective":
-                    "提供用户分页数据访问能力",
+                "target_modules": [],
 
-                  "source_step_order": 1,
+                "expected_outputs": [
+                  "用户列表相关 Repository Evidence"
+                ],
 
-                  "depends_on": [
-                    "TASK-001"
-                  ],
+                "verification": [
+                  "调查结论必须基于真实仓库代码证据"
+                ],
 
-                  "inputs": [
-                    "用户分页 API 契约"
-                  ],
+                "acceptance_criteria_refs": []
+              },
 
-                  "target_modules": [
-                    "src/api"
-                  ],
+              {
+                "task_id": "TASK-002",
+                "task_type": "code_change",
+                "title": "实现用户数据访问能力",
+                "objective":
+                  "提供满足用户列表需求的数据访问能力",
 
-                  "expected_outputs": [
-                    "用户分页查询 API 封装"
-                  ],
+                "source_step_order": 1,
 
-                  "verification": [
-                    "分页查询请求参数符合 API 契约"
-                  ],
+                "depends_on": [
+                  "TASK-001"
+                ],
 
-                  "acceptance_criteria_refs": []
-                },
+                "inputs": [
+                  "用户列表 Repository Evidence"
+                ],
 
-                {
-                  "task_id": "TASK-003",
-                  "task_type": "code_change",
-                  "title": "实现用户列表页面",
-                  "objective":
-                    "完成用户列表展示、搜索、筛选和分页",
+                "responsibilities": [
+                  "实现符合现有契约的用户分页数据访问能力"
+                ],
 
-                  "source_step_order": 2,
+                "investigation_questions": [],
 
-                  "depends_on": [
-                    "TASK-002"
-                  ],
+                "repository_hints": [
+                  "src/api"
+                ],
 
-                  "inputs": [
-                    "用户分页 API 封装",
-                    "TechnicalSpec"
-                  ],
+                "target_modules": [],
 
-                  "target_modules": [
-                    "src/views",
-                    "src/router"
-                  ],
+                "expected_outputs": [
+                  "满足分页需求的数据访问行为"
+                ],
 
-                  "expected_outputs": [
-                    "用户列表页面",
-                    "搜索功能",
-                    "状态筛选功能",
-                    "分页功能"
-                  ],
+                "verification": [
+                  "分页查询行为符合已确认的 API 契约"
+                ],
 
-                  "verification": [
-                    "页面能够展示用户",
-                    "搜索结果正确",
-                    "状态筛选结果正确",
-                    "分页切换结果正确"
-                  ],
+                "acceptance_criteria_refs": []
+              },
 
-                  "acceptance_criteria_refs": [
-                    "页面能够展示用户列表",
-                    "用户名搜索结果正确",
-                    "状态筛选结果正确",
-                    "分页切换结果正确"
-                  ]
-                },
+              {
+                "task_id": "TASK-003",
+                "task_type": "code_change",
+                "title": "实现用户列表交互",
+                "objective":
+                  "完成用户列表展示、搜索、筛选和分页",
 
-                {
-                  "task_id": "TASK-004",
-                  "task_type": "test",
-                  "title": "增加自动化测试",
-                  "objective":
-                    "覆盖用户列表主要行为",
+                "source_step_order": 2,
 
-                  "source_step_order": 4,
+                "depends_on": [
+                  "TASK-002"
+                ],
 
-                  "depends_on": [
-                    "TASK-003"
-                  ],
+                "inputs": [
+                  "用户列表 Repository Evidence",
+                  "用户数据访问能力"
+                ],
 
-                  "inputs": [
-                    "用户列表实现",
-                    "Testing Strategy"
-                  ],
+                "responsibilities": [
+                  "实现用户列表展示",
+                  "实现用户名搜索行为",
+                  "实现状态筛选行为",
+                  "实现分页切换行为"
+                ],
 
-                  "target_modules": [
-                    "tests"
-                  ],
+                "investigation_questions": [],
 
-                  "expected_outputs": [
-                    "Vitest 测试",
-                    "Playwright E2E 测试"
-                  ],
+                "repository_hints": [
+                  "src/views",
+                  "src/router"
+                ],
 
-                  "verification": [
-                    "Unit Test 全部通过",
-                    "E2E Test 全部通过"
-                  ],
+                "target_modules": [],
 
-                  "acceptance_criteria_refs": [
-                    "用户名搜索结果正确",
-                    "状态筛选结果正确",
-                    "分页切换结果正确"
-                  ]
-                },
+                "expected_outputs": [
+                  "满足用户列表需求的页面行为"
+                ],
 
-                {
-                  "task_id": "TASK-005",
-                  "task_type": "verification",
-                  "title": "执行最终验证",
-                  "objective":
-                    "确认本次需求满足交付条件",
+                "verification": [
+                  "页面能够展示用户",
+                  "搜索结果正确",
+                  "状态筛选结果正确",
+                  "分页切换结果正确"
+                ],
 
-                  "source_step_order": 4,
+                "acceptance_criteria_refs": [
+                  "页面能够展示用户列表",
+                  "用户名搜索结果正确",
+                  "状态筛选结果正确",
+                  "分页切换结果正确"
+                ]
+              },
 
-                  "depends_on": [
-                    "TASK-004"
-                  ],
+              {
+                "task_id": "TASK-004",
+                "task_type": "test",
+                "title": "增加自动化测试",
+                "objective":
+                  "验证用户列表主要行为",
 
-                  "inputs": [
-                    "最终代码",
-                    "自动化测试"
-                  ],
+                "source_step_order": 4,
 
-                  "target_modules": [
-                    "整个用户列表功能"
-                  ],
+                "depends_on": [
+                  "TASK-003"
+                ],
 
-                  "expected_outputs": [
-                    "最终验证结果"
-                  ],
+                "inputs": [
+                  "用户列表实现",
+                  "Testing Strategy"
+                ],
 
-                  "verification": [
-                    "lint 通过",
-                    "typecheck 通过",
-                    "Unit Test 通过",
-                    "E2E Test 通过"
-                  ],
+                "responsibilities": [
+                  "验证用户列表核心行为",
+                  "验证搜索、筛选和分页行为"
+                ],
 
-                  "acceptance_criteria_refs": [
-                    "页面能够展示用户列表",
-                    "用户名搜索结果正确",
-                    "状态筛选结果正确",
-                    "分页切换结果正确"
-                  ]
-                }
-              ],
+                "investigation_questions": [],
 
-              "completion_criteria": [
-                "所有 Task 均完成验证",
-                "Requirement Acceptance Criteria 全部满足"
-              ]
-            }
-            """,
+                "repository_hints": [],
+
+                "target_modules": [],
+
+                "expected_outputs": [
+                  "Unit Test Verification Evidence",
+                  "E2E Verification Evidence"
+                ],
+
+                "verification": [
+                  "Unit Test 全部通过",
+                  "E2E Test 全部通过"
+                ],
+
+                "acceptance_criteria_refs": [
+                  "用户名搜索结果正确",
+                  "状态筛选结果正确",
+                  "分页切换结果正确"
+                ]
+              },
+
+              {
+                "task_id": "TASK-005",
+                "task_type": "verification",
+                "title": "执行最终验证",
+                "objective":
+                  "确认本次需求满足交付条件",
+
+                "source_step_order": 4,
+
+                "depends_on": [
+                  "TASK-004"
+                ],
+
+                "inputs": [
+                  "最终代码",
+                  "自动化测试"
+                ],
+
+                "responsibilities": [],
+
+                "investigation_questions": [],
+
+                "repository_hints": [],
+
+                "target_modules": [],
+
+                "expected_outputs": [
+                  "最终 Verification Evidence"
+                ],
+
+                "verification": [
+                  "lint 通过",
+                  "typecheck 通过",
+                  "Unit Test 通过",
+                  "E2E Test 通过"
+                ],
+
+                "acceptance_criteria_refs": [
+                  "页面能够展示用户列表",
+                  "用户名搜索结果正确",
+                  "状态筛选结果正确",
+                  "分页切换结果正确"
+                ]
+              }
+            ],
+
+            "completion_criteria": [
+              "所有 Task 均完成验证",
+              "Requirement Acceptance Criteria 全部满足"
+            ]
+          }
+          """,
             tool_calls=[],
             model="fake-model",
         )
@@ -396,6 +441,16 @@ async def test_generate_task_plan():
 
     assert task_plan.tasks[1].depends_on == ["TASK-001"]
 
+    assert task_plan.planning_stage == "logical"
+
+    assert all(not task.target_modules for task in task_plan.tasks)
+
+    assert task_plan.tasks[0].investigation_questions
+
+    assert task_plan.tasks[1].responsibilities
+
+    assert task_plan.tasks[1].repository_hints == ["src/api"]
+
 
 async def create_task_plan() -> TaskPlan:
     planner = TaskPlanner(llm=FakeTaskLLM())
@@ -416,6 +471,7 @@ async def test_task_plan_validation_success():
         plan=task_plan,
         requirement=create_requirement(),
         implementation_plan=(create_implementation_plan()),
+        project_context=(create_project_context()),
     )
 
     assert result.is_valid is True
@@ -433,6 +489,7 @@ async def test_task_plan_missing_dependency():
         plan=task_plan,
         requirement=create_requirement(),
         implementation_plan=(create_implementation_plan()),
+        project_context=(create_project_context()),
     )
 
     assert result.is_valid is False

@@ -36,6 +36,30 @@ class ContextRenderer:
     writable role 的测试文件，
     只能作为测试风格参考，
     不得因为参考了它就修改它。
+13. 如果 verification_strategy 不为空，
+    它是 Harness 根据 Current Repository、
+    Current Runtime Path 和 Test Layer
+    计算出的 Verification Capability。
+
+14. verification_strategy 只决定：
+    “当前 Test Layer 应该如何证明行为”。
+
+    它不能：
+    - 扩大 Change Surface；
+    - 增加 writable files；
+    - 删除 Requirement；
+    - 弱化 Verification Obligation。
+
+15. proof_routes.routing_action=required_here：
+    当前 Test Task 应优先实现对应 Proof。
+
+16. proof_routes.routing_action=deferred：
+    表示当前 Test Layer 不具备可靠 Proof Capability。
+    不得在当前层伪造测试能力；
+    不得为了让测试通过删除该 Obligation；
+    应由 preferred_layer 负责验证。
+
+17. forbidden_strategies 中的策略不得使用。
 """.strip()
 
     def render(self, bundle: TaskContextBundle) -> RenderedContext:
@@ -52,6 +76,7 @@ class ContextRenderer:
             ],
             "upstream_artifacts": bundle.upstream_artifacts,
             "change_surface": bundle.change_surface,
+            "verification_strategy": (bundle.verification_strategy),
             "code_context": [
                 {
                     "source_type": "repository_file",

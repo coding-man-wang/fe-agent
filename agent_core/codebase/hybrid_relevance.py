@@ -305,7 +305,16 @@ class HybridRelevantFileSelector:
         TargetMatchType,
     ]:
         """
-        target_modules 的信息精确程度不同。
+        Repository Hint 的信息精确程度不同。
+
+        新 Logical Plan 使用 repository_hints；
+        历史 Plan 通过 repository_search_hints()
+        兼容 target_modules。
+
+        注意：
+        这里的 Target Evidence 只用于
+        Retrieval Ranking / Context Role，
+        不能直接成为 Write Permission。
 
         exact file:
             +25
@@ -452,7 +461,7 @@ class HybridRelevantFileSelector:
 
         best_target_match_value: str | None = None
 
-        for target in task.target_modules:
+        for target in task.repository_search_hints():
 
             (
                 target_bonus,

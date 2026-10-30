@@ -100,6 +100,42 @@ class EvidenceGap(BaseModel):
     reason: str = Field(min_length=1)
 
 
+ExecutionObligationCoverageStatus = Literal[
+    "satisfied_by_current_code",
+    "addressed_by_proposed_change",
+    "unresolved",
+]
+
+
+class ExecutionObligationCoverage(BaseModel):
+    """
+    Coding Analysis 对一项
+    Execution Obligation 的明确结论。
+
+    satisfied_by_current_code:
+        最新代码已经满足，
+        不需要修改。
+
+    addressed_by_proposed_change:
+        当前 proposed_changes
+        会负责完成。
+
+    unresolved:
+        当前证据不足，
+        Harness 不允许进入 Patch。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    obligation_id: str = Field(min_length=1)
+
+    status: ExecutionObligationCoverageStatus
+
+    related_paths: list[str] = Field(default_factory=list)
+
+    reason: str = Field(min_length=1)
+
+
 class ReadOnlyCodingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -130,6 +166,10 @@ class ReadOnlyCodingResult(BaseModel):
     )
 
     execution_status: Literal["not_executed"] = "not_executed"
+
+    obligation_coverage: list[ExecutionObligationCoverage] = Field(
+        default_factory=list,
+    )
 
 
 CodeChangeAction = Literal[

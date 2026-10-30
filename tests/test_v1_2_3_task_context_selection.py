@@ -64,12 +64,11 @@ def test_select_rebuilds_current_task_context(
         )
     )
 
-    (
-        retrieval_service.retrieve.assert_awaited_once_with(
-            task=task,
-            index=index,
-            query_specs=query_specs,
-        )
+    retrieval_service.retrieve.assert_awaited_once_with(
+        task=task,
+        index=index,
+        query_specs=query_specs,
+        semantic_enabled=False,
     )
 
     graph_builder.build.assert_called_once_with(

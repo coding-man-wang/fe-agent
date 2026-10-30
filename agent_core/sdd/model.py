@@ -146,6 +146,85 @@ class ProjectContext(BaseModel):
         default_factory=list, description="已经确定与当前需求相关的代码文件"
     )
 
+    def repository_hint_candidates(
+        self,
+    ) -> list[str]:
+        """
+        返回前置 Planning 阶段允许引用的
+        Repository Hint。
+
+        这些 Hint 只能来自已经明确提供的
+        ProjectContext Evidence。
+
+        directory_summary 例如：
+
+            src/api - API 访问层
+
+        只暴露：
+
+            src/api
+
+        而不是让 Planner 自己推导：
+            src/api/orders.ts
+        """
+
+        result: list[str] = []
+
+        seen: set[str] = set()
+
+        def append(
+            value: str,
+        ) -> None:
+
+            normalized = (
+                value.replace(
+                    "\\",
+                    "/",
+                )
+                .strip()
+                .strip("/")
+            )
+
+            if not normalized:
+                return
+
+            key = normalized.lower()
+
+            if key in seen:
+                return
+
+            seen.add(key)
+
+            result.append(normalized)
+
+        for entry in self.directory_summary:
+
+            value = entry.strip()
+
+            if not value:
+                continue
+
+            repository_hint = value
+
+            for separator in (
+                " - ",
+                " – ",
+                " — ",
+            ):
+                if separator in value:
+                    repository_hint = value.split(
+                        separator,
+                        1,
+                    )[0].strip()
+                    break
+
+            append(repository_hint)
+
+        for path in self.relevant_files:
+            append(path)
+
+        return result
+
 
 class TechnicalDecision(BaseModel):
     topic: str = Field(description="本次技术决策关注的问题")
@@ -266,6 +345,65 @@ TaskType = Literal[
     "verification",
 ]
 
+TaskPlanningStage = Literal[
+    "legacy",
+    "logical",
+]
+
+
+class ExecutionObligation(BaseModel):
+    """
+    Runtime Execution Plan 中必须兑现的一项逻辑任务义务。
+
+    它不是 Planner 直接生成的内容。
+
+    Logical TaskPlan:
+        execution_obligations = []
+
+    ExecutionPlanCompressor:
+        根据被聚合的 Logical Tasks
+        生成 execution_obligations。
+
+    Harness 用它保证：
+
+        Execution Granularity 可以变粗，
+
+    但：
+
+        Logical Responsibility / Acceptance
+        不能因此消失。
+    """
+
+    obligation_id: str = Field(
+        min_length=1,
+        description="稳定的执行义务 ID，当前使用来源 Task ID",
+    )
+
+    source_task_id: str = Field(
+        min_length=1,
+        description="该执行义务来源的 Logical Task",
+    )
+
+    objective: str = Field(
+        min_length=1,
+        description="该 Logical Task 原始目标",
+    )
+
+    responsibilities: list[str] = Field(
+        default_factory=list,
+        description="必须完成的工程责任",
+    )
+
+    expected_outputs: list[str] = Field(
+        default_factory=list,
+        description="完成该义务应该产生的结果",
+    )
+
+    acceptance_criteria_refs: list[str] = Field(
+        default_factory=list,
+        description="该义务对应的 Requirement Acceptance Criteria",
+    )
+
 
 class TaskDefinition(BaseModel):
     task_id: str = Field(description="任务唯一编号，例如 TASK-001")
@@ -287,12 +425,78 @@ class TaskDefinition(BaseModel):
 
     inputs: list[str] = Field(
         default_factory=list,
-        description="执行当前任务需要参考的输入信息",
+        description=("执行当前任务需要参考的" "结构化输入或上游结果"),
     )
+
+    # ==================================
+    # v1.3 Logical Planning
+    #
+    # 前置 TaskPlan 负责：
+    #
+    # “解决什么责任问题”
+    #
+    # 而不是：
+    #
+    # “修改哪个具体文件”
+    # ==================================
+
+    responsibilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "当前 Task 负责解决的"
+            "逻辑/行为/技术责任；"
+            "不得把未经 Repository "
+            "Evidence 确认的具体文件"
+            "当作责任描述"
+        ),
+    )
+
+    investigation_questions: list[str] = Field(
+        default_factory=list,
+        description=(
+            "需要通过 Repository "
+            "Investigation 回答的问题；"
+            "这些问题用于指导 Retrieval "
+            "和后续 Repository Evidence 收集"
+        ),
+    )
+
+    repository_hints: list[str] = Field(
+        default_factory=list,
+        description=(
+            "前置 Planning 阶段允许使用的"
+            "低承诺 Repository Hint；"
+            "只能来自 ProjectContext 已明确"
+            "提供的目录或文件信息，"
+            "不能由 Planner 自行猜路径"
+        ),
+    )
+
+    # ==================================
+    # Legacy Compatibility
+    #
+    # 不删除。
+    #
+    # 原因：
+    #
+    # - 历史 Benchmark Run
+    # - PreparedExecutionInput
+    # - 已冻结 TaskPlan
+    #
+    # 仍然可能包含 target_modules。
+    #
+    # v1.3 新 Logical Plan
+    # 必须输出 []。
+    # ==================================
 
     target_modules: list[str] = Field(
         default_factory=list,
-        description="预计需要处理的项目模块",
+        description=(
+            "v1.2 兼容字段。"
+            "v1.3 新生成的 logical plan "
+            "必须保持为空；"
+            "只用于读取历史冻结 TaskPlan"
+        ),
     )
 
     expected_outputs: list[str] = Field(
@@ -310,15 +514,85 @@ class TaskDefinition(BaseModel):
         description="当前任务覆盖的 Requirement Acceptance Criteria",
     )
 
+    execution_obligations: list[ExecutionObligation] = Field(
+        default_factory=list,
+        description=(
+            "Runtime Execution Plan "
+            "由 Harness/Compressor 注入的执行义务；"
+            "Logical Planner 必须保持为空"
+        ),
+    )
+
+    def repository_search_hints(
+        self,
+    ) -> list[str]:
+        """
+        Repository Retrieval 使用的
+        统一 Hint 入口。
+
+        新 Plan：
+            repository_hints
+
+        历史 Plan：
+            target_modules
+
+        新字段优先，
+        旧字段只负责兼容。
+        """
+
+        result: list[str] = []
+
+        seen: set[str] = set()
+
+        for value in [
+            *self.repository_hints,
+            *self.target_modules,
+        ]:
+
+            normalized = (
+                value.replace(
+                    "\\",
+                    "/",
+                )
+                .strip()
+                .strip("/")
+            )
+
+            if not normalized:
+                continue
+
+            key = normalized.lower()
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            result.append(normalized)
+
+        return result
+
 
 class TaskPlan(BaseModel):
-    summary: str = Field(description="整个 Task Plan 的总体说明")
+
+    planning_stage: TaskPlanningStage = Field(
+        default="legacy",
+        description=(
+            "TaskPlan 所处 Planning 阶段。"
+            "legacy 表示历史 Plan；"
+            "logical 表示 v1.3 "
+            "Investigation 前的低承诺逻辑计划"
+        ),
+    )
+
+    summary: str = Field(description=("整个 Task Plan 的总体说明"))
 
     tasks: list[TaskDefinition] = Field(
-        default_factory=list, description="所有可执行任务"
+        default_factory=list,
+        description=("所有逻辑任务"),
     )
 
     completion_criteria: list[str] = Field(
         default_factory=list,
-        description="整个任务计划完成标准",
+        description=("整个任务计划完成标准"),
     )

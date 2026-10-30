@@ -116,11 +116,44 @@ async def test_rejects_unknown_file(
 
     agent = ReadOnlyCodingAgent(model=FakeTextModel(response))
 
+    bundle = create_test_bundle(tmp_path)
+
+    # ==================================
+    # 当前测试不是验证：
+    #
+    #   Change Surface 拒绝未知路径
+    #
+    # 而是验证：
+    #
+    #   即使路径已经获得 Write Permission，
+    #   action=modify 仍必须存在于
+    #   Current Code Context。
+    #
+    # 所以这里显式模拟：
+    # src/unknown.ts 已被 Change Surface
+    # 批准为 writable target，
+    # 但 Code Context 中不存在该文件。
+    # ==================================
+
+    surface = dict(bundle.change_surface or {})
+
+    surface["implementation_targets"] = [
+        "src/api/user.ts",
+        "src/unknown.ts",
+    ]
+
+    bundle = bundle.model_copy(
+        deep=True,
+        update={
+            "change_surface": surface,
+        },
+    )
+
     with pytest.raises(
         CodingOutputError,
-        match="未提供的文件",
+        match="未提供的已有文件",
     ):
-        await agent.analyze(create_test_bundle(tmp_path))
+        await agent.analyze(bundle)
 
 
 @pytest.mark.asyncio
