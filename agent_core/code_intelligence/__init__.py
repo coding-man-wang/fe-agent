@@ -20,6 +20,13 @@ from agent_core.code_intelligence.registry import (
     DuplicateAdapterError,
     SymbolExtractorRegistry,
 )
+from agent_core.code_intelligence.adapters import (
+    TypeScriptSymbolExtractorAdapter,
+)
+from agent_core.code_intelligence.symbol_index import (
+    DuplicateSymbolIdError,
+    SymbolIndex,
+)
 
 __all__ = [
     "AdapterNotFoundError",
@@ -36,4 +43,7 @@ __all__ = [
     "SymbolKind",
     "TechnologyProfile",
     "canonicalize_technology_id",
+    "DuplicateSymbolIdError",
+    "SymbolIndex",
+    "TypeScriptSymbolExtractorAdapter",
 ]

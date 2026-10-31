@@ -11,6 +11,8 @@ dependencies = [
     "pydantic",
     "pylint>=4.0.8",
     "python-dotenv",
+    "tree-sitter==0.26.0",
+    "tree-sitter-typescript==0.23.2",
 ]
 
 [build-system]
