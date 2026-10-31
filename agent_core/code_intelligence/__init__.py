@@ -27,6 +27,10 @@ from agent_core.code_intelligence.symbol_index import (
     DuplicateSymbolIdError,
     SymbolIndex,
 )
+from agent_core.code_intelligence.adapters import (
+    TypeScriptSymbolExtractorAdapter,
+    VueSfcSymbolExtractorAdapter,
+)
 
 __all__ = [
     "AdapterNotFoundError",
@@ -46,4 +50,5 @@ __all__ = [
     "DuplicateSymbolIdError",
     "SymbolIndex",
     "TypeScriptSymbolExtractorAdapter",
+    "VueSfcSymbolExtractorAdapter",
 ]
