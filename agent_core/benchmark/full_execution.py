@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from agent_core.artifacts.store import JsonTaskArtifactStore
@@ -59,6 +60,7 @@ from agent_core.codebase.impact import (
 )
 from agent_core.codebase.model import RepositoryProfile
 from agent_core.codebase.task_context_selection import (
+    TaskContextSelectionResult,
     TaskContextSelectionService,
 )
 from agent_core.coding.agent import ReadOnlyCodingAgent
@@ -144,6 +146,49 @@ from agent_core.benchmark.obligation_evidence import ObligationEvidenceEnricher
 
 class FullExecutionBenchmarkError(RuntimeError):
     pass
+
+
+def _context_selection_diagnostics(
+    context_selection: TaskContextSelectionResult,
+) -> dict[str, Any]:
+    """仅记录阅读结果及来源；不生成影响范围或修改权限。"""
+    retrieval_paths = [
+        item.relative_path
+        for item in context_selection.retrieval_selection.selected_files
+    ]
+    selected_paths = [
+        item.relative_path for item in context_selection.selection.selected_files
+    ]
+    retrieval_path_set = set(retrieval_paths)
+
+    # 兼容旧结果对象与未配置新字段的测试替身。
+    symbol_paths = getattr(context_selection, "symbol_added_files", [])
+    if not isinstance(symbol_paths, (list, tuple)):
+        symbol_paths = []
+    symbol_path_set = set(symbol_paths)
+    symbol_added_paths = [path for path in selected_paths if path in symbol_path_set]
+    graph_added_paths = [
+        path
+        for path in selected_paths
+        if path not in retrieval_path_set and path not in symbol_path_set
+    ]
+    symbol_issues = getattr(context_selection, "symbol_issues", [])
+    if not isinstance(symbol_issues, (list, tuple)):
+        symbol_issues = []
+    symbol_error = getattr(context_selection, "symbol_error", None)
+    if not isinstance(symbol_error, str):
+        symbol_error = None
+
+    return {
+        "context_retrieval_mode": context_selection.retrieval_mode,
+        "semantic_fallback_reason": context_selection.semantic_error,
+        "retrieval_files": retrieval_paths,
+        "selected_context_files": selected_paths,
+        "graph_added_files": graph_added_paths,
+        "symbol_added_files": symbol_added_paths,
+        "symbol_fallback_reason": symbol_error,
+        "symbol_issues": list(symbol_issues),
+    }
 
 
 class FullExecutionBenchmarkService:
@@ -669,39 +714,11 @@ class FullExecutionBenchmarkService:
                         requirement_spec=(requirement),
                     )
 
-                    retrieval_paths = [
-                        item.relative_path
-                        for item in (
-                            context_selection.retrieval_selection.selected_files
-                        )
-                    ]
-
-                    selected_paths = [
-                        item.relative_path
-                        for item in (context_selection.selection.selected_files)
-                    ]
-
-                    retrieval_path_set = set(retrieval_paths)
-
-                    graph_added_paths = [
-                        path
-                        for path in selected_paths
-                        if (path not in retrieval_path_set)
-                    ]
-
                     task_record = task_record.model_copy(
                         deep=True,
                         update={
                             "context_revision": (current_sha),
-                            "context_retrieval_mode": (
-                                context_selection.retrieval_mode
-                            ),
-                            "semantic_fallback_reason": (
-                                context_selection.semantic_error
-                            ),
-                            "retrieval_files": (retrieval_paths),
-                            "selected_context_files": (selected_paths),
-                            "graph_added_files": (graph_added_paths),
+                            **_context_selection_diagnostics(context_selection),
                         },
                     )
 

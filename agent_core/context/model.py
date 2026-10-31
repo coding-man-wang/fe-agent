@@ -3,6 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from agent_core.codebase.model import RepositoryProfile
+from agent_core.codebase.symbol_retrieval_model import SymbolCandidate
 from agent_core.sdd.model import RequirementSpec, TaskDefinition, TechnicalSpec
 
 ContextContentMode = Literal["full_file", "semantic_chunk", "truncated"]
@@ -17,6 +18,8 @@ class CodeContextItem(BaseModel):
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
     relevance_reasons: list[str] = Field(default_factory=list)
+    # 仅用于解释阅读相关性；不会转换成修改目标或写入权限。
+    symbol_candidates: list[SymbolCandidate] = Field(default_factory=list)
     content_chars: int = Field(ge=0)
 
 

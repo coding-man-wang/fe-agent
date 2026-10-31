@@ -3,6 +3,7 @@ from typing import Protocol
 from agent_core.code_intelligence.model import (
     SourceDocument,
     SymbolExtractionResult,
+    SymbolReferenceExtractionResult,
     TechnologyProfile,
 )
 from agent_core.code_intelligence.model import (
@@ -109,4 +110,5 @@ class SymbolReferenceExtractorAdapter(Protocol):
         *,
         profile: TechnologyProfile,
         document: SourceDocument,
-    ) -> SymbolReferenceExtractionResult: ...
+    ) -> SymbolReferenceExtractionResult:
+        pass

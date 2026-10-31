@@ -144,3 +144,50 @@ class SymbolCallGraphBuilder:
                 )
 
         return graph
+
+
+class SymbolReferenceGraphBuilder:
+    """
+    所有 resolved Reference
+            ↓
+    Symbol Graph Edge
+
+    call
+        → calls
+
+    read / type_reference
+        → references
+    """
+
+    def build(
+        self,
+        resolutions: Iterable[ResolvedSymbolReference],
+    ) -> SymbolGraph:
+
+        graph = SymbolGraph()
+
+        for resolution in resolutions:
+
+            if resolution.status != "resolved":
+                continue
+
+            if resolution.source_symbol_id is None:
+                continue
+
+            relation = (
+                "calls" if (resolution.reference_kind == "call") else "references"
+            )
+
+            for target_id in resolution.target_symbol_ids:
+
+                graph.add_edge(
+                    SymbolGraphEdge(
+                        source_symbol_id=(resolution.source_symbol_id),
+                        target_symbol_id=(target_id),
+                        relation=relation,
+                        source_path=(resolution.source_path),
+                        line_number=(resolution.line_number),
+                    )
+                )
+
+        return graph

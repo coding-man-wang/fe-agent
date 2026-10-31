@@ -118,6 +118,7 @@ def _build_context_selection_service(
     capture_service = runner.retrieval_capture_service
 
     return TaskContextSelectionService(
+        enable_symbol_retrieval=True,
         file_indexer=(capture_service.file_indexer),
         retrieval_service=(capture_service.retrieval_service),
         code_chunker=(capture_service.code_chunker),

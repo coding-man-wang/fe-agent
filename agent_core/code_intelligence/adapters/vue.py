@@ -13,10 +13,20 @@ from agent_core.code_intelligence.model import (
     CodeSymbol,
     SourceDocument,
     SymbolExtractionResult,
+    SymbolReferenceExtractionResult,
     TechnologyProfile,
+    ImportBindingExtractionResult,
+    ModuleExportBinding,
+    ModuleExportExtractionResult,
 )
 from agent_core.code_intelligence.adapters.typescript_imports import (
     TypeScriptImportBindingExtractorAdapter,
+)
+from agent_core.code_intelligence.adapters.typescript_exports import (
+    TypeScriptModuleExportExtractor,
+)
+from agent_core.code_intelligence.adapters.typescript_references import (
+    TypeScriptSymbolReferenceExtractor,
 )
 
 VueScriptKind = Literal[
@@ -206,6 +216,88 @@ class VueSfcSymbolExtractorAdapter:
             adapter_id=self.adapter_id,
             relative_path=(document.relative_path),
             exports=exports,
+            issues=issues,
+        )
+
+    def extract_references(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> SymbolReferenceExtractionResult:
+
+        if not self.supports(
+            profile=profile,
+            document=document,
+        ):
+            raise ValueError("Vue Adapter 不支持该文件: " + document.relative_path)
+
+        extractor = TypeScriptSymbolReferenceExtractor()
+
+        references: list[SymbolReferenceOccurrence] = []
+
+        issues: list[CodeIntelligenceIssue] = []
+
+        blocks = self._extract_script_blocks(document.content)
+
+        for block_index, block in enumerate(
+            blocks,
+            start=1,
+        ):
+
+            if block.has_src or block.language not in {
+                "ts",
+                "tsx",
+            }:
+                continue
+
+            suffix = ".tsx" if block.language == "tsx" else ".ts"
+
+            virtual_document = SourceDocument(
+                relative_path=(
+                    f"{document.relative_path}"
+                    f".__reference_"
+                    f"{block_index}"
+                    f"{suffix}"
+                ),
+                content=block.content,
+                language=("tsx" if block.language == "tsx" else "typescript"),
+            )
+
+            result = extractor.extract_references(
+                profile=profile,
+                document=(virtual_document),
+            )
+
+            for reference in result.references:
+                references.append(
+                    reference.model_copy(
+                        deep=True,
+                        update={
+                            "source_path": (document.relative_path),
+                            "line_number": (reference.line_number + block.line_offset),
+                        },
+                    )
+                )
+
+            for issue in result.issues:
+                issues.append(
+                    issue.model_copy(
+                        deep=True,
+                        update={
+                            "line_number": (
+                                (issue.line_number + block.line_offset)
+                                if (issue.line_number is not None)
+                                else None
+                            )
+                        },
+                    )
+                )
+
+        return SymbolReferenceExtractionResult(
+            adapter_id=self.adapter_id,
+            relative_path=(document.relative_path),
+            references=references,
             issues=issues,
         )
 

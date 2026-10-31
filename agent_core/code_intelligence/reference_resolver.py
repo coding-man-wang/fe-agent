@@ -6,6 +6,7 @@ from agent_core.code_intelligence.definition_resolver import (
     SymbolDefinitionResolver,
 )
 from agent_core.code_intelligence.model import (
+    CodeSymbol,
     ImportBinding,
     ResolvedSymbolReference,
     SymbolReferenceOccurrence,
@@ -19,18 +20,31 @@ class SymbolReferenceResolver:
     """
     Reference Occurrence
         ↓
-    Lexical Binding
+    Lexical Scope
         ↓
-    Import Binding
+    Import / Namespace Binding
         ↓
     Definition Resolution
         ↓
-    Resolved Symbol Reference
+    Resolved Reference
     """
 
-    _DIRECT_CALLABLE_KINDS = {
+    _VALUE_KINDS = {
         "function",
         "variable",
+        "class",
+        "component",
+    }
+
+    _CALLABLE_KINDS = {
+        "function",
+        "variable",
+    }
+
+    _TYPE_KINDS = {
+        "type",
+        "interface",
+        "class",
     }
 
     def __init__(
@@ -62,6 +76,10 @@ class SymbolReferenceResolver:
                 )
             ].append(binding)
 
+    # ==================================
+    # Public Resolution
+    # ==================================
+
     def resolve(
         self,
         occurrence: SymbolReferenceOccurrence,
@@ -74,68 +92,75 @@ class SymbolReferenceResolver:
 
         source_symbol_id = owner.symbol_id if owner is not None else None
 
-        # ==================================
-        # 4A 只解析 identifier call。
-        # ==================================
-
-        if (
-            occurrence.reference_kind != "call"
-            or occurrence.target_form != "identifier"
-            or not occurrence.name
-        ):
-
-            return ResolvedSymbolReference(
-                source_path=(occurrence.source_path),
-                reference_kind=(occurrence.reference_kind),
-                expression_text=(occurrence.expression_text),
-                line_number=(occurrence.line_number),
+        if occurrence.target_form == "identifier":
+            return self._resolve_identifier(
+                occurrence=occurrence,
+                owner=owner,
                 source_symbol_id=(source_symbol_id),
-                status="unsupported",
-                reason=("member_or_non_identifier_" "reference_deferred_to_" "v1_4_4b"),
             )
+
+        if occurrence.target_form == "member":
+            return self._resolve_member(
+                occurrence=occurrence,
+                owner=owner,
+                source_symbol_id=(source_symbol_id),
+            )
+
+        return self._result(
+            occurrence=occurrence,
+            source_symbol_id=(source_symbol_id),
+            status="unsupported",
+            reason=("unknown_reference_target_form"),
+        )
+
+    # ==================================
+    # Identifier
+    # ==================================
+
+    def _resolve_identifier(
+        self,
+        *,
+        occurrence: SymbolReferenceOccurrence,
+        owner: CodeSymbol | None,
+        source_symbol_id: str | None,
+    ) -> ResolvedSymbolReference:
 
         name = occurrence.name
 
-        # ==================================
-        # Local Lexical Binding 优先
-        #
-        # 例如：
-        #
-        # import { listOrders } ...
-        #
-        # function load() {
-        #   const listOrders = () => []
-        #   listOrders()
-        # }
-        #
-        # 必须解析到 Local Binding，
-        # 不能解析到 import。
-        # ==================================
+        if not name:
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="unsupported",
+                reason="missing_identifier_name",
+            )
+
+        # ----------------------------------
+        # Lexical Scope 优先
+        # ----------------------------------
 
         local = self._resolve_local(
             source_path=(occurrence.source_path),
             name=name,
             owner=owner,
+            reference_kind=(occurrence.reference_kind),
         )
 
         if local:
 
-            return ResolvedSymbolReference(
-                source_path=(occurrence.source_path),
-                reference_kind="call",
-                expression_text=(occurrence.expression_text),
-                line_number=(occurrence.line_number),
+            return self._result(
+                occurrence=occurrence,
                 source_symbol_id=(source_symbol_id),
                 status="resolved",
-                target_symbol_ids=[symbol.symbol_id for symbol in local],
-                reason="local_lexical_binding",
+                target_symbol_ids=[item.symbol_id for item in local],
+                reason=("local_lexical_binding"),
             )
 
-        # ==================================
-        # Imported Binding
-        # ==================================
+        # ----------------------------------
+        # Import Binding
+        # ----------------------------------
 
-        import_bindings = self._imports_by_file_and_name.get(
+        imports = self._imports_by_file_and_name.get(
             (
                 occurrence.source_path,
                 name,
@@ -143,92 +168,264 @@ class SymbolReferenceResolver:
             [],
         )
 
-        if len(import_bindings) > 1:
+        if len(imports) > 1:
 
-            return ResolvedSymbolReference(
-                source_path=(occurrence.source_path),
-                reference_kind="call",
-                expression_text=(occurrence.expression_text),
-                line_number=(occurrence.line_number),
+            return self._result(
+                occurrence=occurrence,
                 source_symbol_id=(source_symbol_id),
                 status="ambiguous",
                 reason=("multiple_import_bindings_" "with_same_local_name"),
             )
 
-        if len(import_bindings) == 1:
+        if len(imports) == 1:
 
-            definition = self.definition_resolver.resolve(import_bindings[0])
+            binding = imports[0]
 
-            if definition.status == "resolved":
-
-                return ResolvedSymbolReference(
-                    source_path=(occurrence.source_path),
-                    reference_kind="call",
-                    expression_text=(occurrence.expression_text),
-                    line_number=(occurrence.line_number),
+            # namespace 本身作为 identifier：
+            #
+            # const x = api
+            #
+            # 当前只知道它代表 Module，
+            # 不是单一 CodeSymbol。
+            if binding.binding_kind == "namespace":
+                return self._result(
+                    occurrence=occurrence,
                     source_symbol_id=(source_symbol_id),
-                    status="resolved",
-                    target_symbol_ids=(definition.target_symbol_ids),
-                    reason=("import_binding"),
+                    status="unsupported",
+                    reason=("namespace_binding_" "is_module_not_symbol"),
                 )
 
-            if definition.status == "external_module":
+            definition = self.definition_resolver.resolve(binding)
 
-                return ResolvedSymbolReference(
-                    source_path=(occurrence.source_path),
-                    reference_kind="call",
-                    expression_text=(occurrence.expression_text),
-                    line_number=(occurrence.line_number),
-                    source_symbol_id=(source_symbol_id),
-                    status="external",
-                    reason=("external_import_binding"),
-                )
-
-            if definition.status == "ambiguous_export":
-
-                return ResolvedSymbolReference(
-                    source_path=(occurrence.source_path),
-                    reference_kind="call",
-                    expression_text=(occurrence.expression_text),
-                    line_number=(occurrence.line_number),
-                    source_symbol_id=(source_symbol_id),
-                    status="ambiguous",
-                    reason=(definition.reason),
-                )
-
-            return ResolvedSymbolReference(
-                source_path=(occurrence.source_path),
-                reference_kind="call",
-                expression_text=(occurrence.expression_text),
-                line_number=(occurrence.line_number),
+            return self._map_definition(
+                occurrence=occurrence,
                 source_symbol_id=(source_symbol_id),
-                status="unresolved",
-                reason=("import_definition_" f"{definition.status}"),
+                definition=definition,
+            )
+
+        return self._result(
+            occurrence=occurrence,
+            source_symbol_id=(source_symbol_id),
+            status="unresolved",
+            reason="no_visible_binding",
+        )
+
+    # ==================================
+    # Member
+    # ==================================
+
+    def _resolve_member(
+        self,
+        *,
+        occurrence: SymbolReferenceOccurrence,
+        owner: CodeSymbol | None,
+        source_symbol_id: str | None,
+    ) -> ResolvedSymbolReference:
+
+        member_name = occurrence.member_name
+
+        receiver_name = occurrence.receiver_name
+
+        if not member_name:
+
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="unsupported",
+                reason=("missing_member_name"),
             )
 
         # ==================================
-        # 没有 Local / Import Binding。
-        #
-        # 不进行全仓名称搜索猜测。
+        # this.method()
         # ==================================
 
-        return ResolvedSymbolReference(
-            source_path=(occurrence.source_path),
-            reference_kind="call",
-            expression_text=(occurrence.expression_text),
-            line_number=(occurrence.line_number),
+        if receiver_name == "this":
+
+            targets = self._resolve_this_member(
+                source_path=(occurrence.source_path),
+                member_name=member_name,
+                owner=owner,
+                reference_kind=(occurrence.reference_kind),
+            )
+
+            if targets:
+
+                return self._result(
+                    occurrence=occurrence,
+                    source_symbol_id=(source_symbol_id),
+                    status="resolved",
+                    target_symbol_ids=[item.symbol_id for item in targets],
+                    reason="this_member",
+                )
+
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="unresolved",
+                reason=("this_member_not_found"),
+            )
+
+        # ==================================
+        # api.listOrders()
+        #
+        # api 必须是 namespace import。
+        # ==================================
+
+        if receiver_name:
+
+            # 同名局部对象会遮蔽 namespace import；不能沿旧导入生成错误图边。
+            local_receiver = self._resolve_local(
+                source_path=occurrence.source_path,
+                name=receiver_name,
+                owner=owner,
+                reference_kind="read",
+            )
+            if local_receiver:
+                return self._result(
+                    occurrence=occurrence,
+                    source_symbol_id=source_symbol_id,
+                    status="unsupported",
+                    reason="local_object_member_requires_value_flow",
+                )
+
+            imports = self._imports_by_file_and_name.get(
+                (
+                    occurrence.source_path,
+                    receiver_name,
+                ),
+                [],
+            )
+
+            if len(imports) > 1:
+
+                return self._result(
+                    occurrence=occurrence,
+                    source_symbol_id=(source_symbol_id),
+                    status="ambiguous",
+                    reason=("multiple_receiver_" "import_bindings"),
+                )
+
+            if len(imports) == 1:
+
+                binding = imports[0]
+
+                if binding.binding_kind != "namespace":
+
+                    return self._result(
+                        occurrence=occurrence,
+                        source_symbol_id=(source_symbol_id),
+                        status="unsupported",
+                        reason=("member_receiver_import_" "is_not_namespace"),
+                    )
+
+                definition = self.definition_resolver.resolve_namespace_member(
+                    binding=binding,
+                    member_name=member_name,
+                )
+
+                return self._map_definition(
+                    occurrence=occurrence,
+                    source_symbol_id=(source_symbol_id),
+                    definition=definition,
+                )
+
+            # --------------------------------
+            # local object:
+            #
+            # store.fetchOrders()
+            #
+            # 需要 Value Flow / Type Analysis。
+            # 不能按方法名全仓猜。
+            # --------------------------------
+
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="unsupported",
+                reason=("local_object_member_" "requires_value_flow"),
+            )
+
+        return self._result(
+            occurrence=occurrence,
             source_symbol_id=(source_symbol_id),
-            status="unresolved",
-            reason=("no_visible_binding"),
+            status="unsupported",
+            reason=("complex_member_receiver_" "requires_value_flow"),
         )
+
+    # ==================================
+    # this.member
+    # ==================================
+
+    def _resolve_this_member(
+        self,
+        *,
+        source_path: str,
+        member_name: str,
+        owner: CodeSymbol | None,
+        reference_kind: str,
+    ) -> list[CodeSymbol]:
+
+        if owner is None:
+            return []
+
+        scope = [
+            owner,
+            *self.symbol_index.parent_chain(owner.symbol_id),
+        ]
+
+        owner_class = next(
+            (symbol for symbol in scope if symbol.kind == "class"),
+            None,
+        )
+
+        if owner_class is None:
+            return []
+
+        candidates = self.symbol_index.find_by_file_and_name(
+            relative_path=(source_path),
+            name=member_name,
+        )
+
+        if reference_kind == "call":
+
+            allowed_kinds = {
+                "method",
+            }
+
+        elif reference_kind == "read":
+
+            allowed_kinds = {
+                "method",
+                "variable",
+            }
+
+        else:
+            return []
+
+        return [
+            item
+            for item in candidates
+            if (
+                item.parent_symbol_id == owner_class.symbol_id
+                and item.kind in allowed_kinds
+            )
+        ]
+
+    # ==================================
+    # Local Lexical Binding
+    # ==================================
 
     def _resolve_local(
         self,
         *,
         source_path: str,
         name: str,
-        owner,
-    ):
+        owner: CodeSymbol | None,
+        reference_kind: str,
+    ) -> list[CodeSymbol]:
+
+        allowed_kinds = self._allowed_local_kinds(reference_kind)
+
         candidates = [
             symbol
             for symbol in (
@@ -237,43 +434,23 @@ class SymbolReferenceResolver:
                     name=name,
                 )
             )
-            if (symbol.kind in self._DIRECT_CALLABLE_KINDS)
+            if (symbol.kind in allowed_kinds)
         ]
 
         if not candidates:
             return []
 
-        # ==================================
-        # Module-level Call
-        #
-        # 当前没有 Module Symbol，
-        # 所以只能看到 top-level definitions。
-        # ==================================
-
         if owner is None:
+
             return [item for item in candidates if (item.parent_symbol_id is None)]
 
-        # ==================================
-        # Recursive Call
-        # ==================================
+        # Recursive self reference
+        self_reference = [
+            item for item in candidates if (item.symbol_id == owner.symbol_id)
+        ]
 
-        recursive = [item for item in candidates if (item.symbol_id == owner.symbol_id)]
-
-        if recursive:
-            return recursive
-
-        # ==================================
-        # Visible Scope Chain
-        #
-        # owner:
-        #   inner()
-        #
-        # 可见 Container：
-        #
-        # inner
-        # outer
-        # component / module-level
-        # ==================================
+        if self_reference:
+            return self_reference
 
         scope_ids: list[str | None] = [
             owner.symbol_id,
@@ -283,14 +460,13 @@ class SymbolReferenceResolver:
 
         scope_ids.extend(item.symbol_id for item in parent_chain)
 
-        # TypeScript top-level Symbol
-        # parent_symbol_id = None。
+        # TypeScript module scope
         scope_ids.append(None)
 
         ranked: list[
             tuple[
                 int,
-                object,
+                CodeSymbol,
             ]
         ] = []
 
@@ -315,84 +491,86 @@ class SymbolReferenceResolver:
 
         return [item[1] for item in ranked if item[0] == best_rank]
 
-    def extract_references(
+    def _allowed_local_kinds(
+        self,
+        reference_kind: str,
+    ) -> set[str]:
+
+        if reference_kind == "call":
+            return self._CALLABLE_KINDS
+
+        if reference_kind == "read":
+            return self._VALUE_KINDS
+
+        if reference_kind == "type_reference":
+            return self._TYPE_KINDS
+
+        return set()
+
+    # ==================================
+    # Definition → Reference Result
+    # ==================================
+
+    def _map_definition(
         self,
         *,
-        profile: TechnologyProfile,
-        document: SourceDocument,
-    ) -> SymbolReferenceExtractionResult:
+        occurrence: SymbolReferenceOccurrence,
+        source_symbol_id: str | None,
+        definition,
+    ) -> ResolvedSymbolReference:
 
-        if not self.supports(
-            profile=profile,
-            document=document,
-        ):
-            raise ValueError("Vue Adapter 不支持该文件: " + document.relative_path)
+        if definition.status == "resolved":
 
-        extractor = TypeScriptSymbolReferenceExtractor()
-
-        references: list[SymbolReferenceOccurrence] = []
-
-        issues: list[CodeIntelligenceIssue] = []
-
-        blocks = self._extract_script_blocks(document.content)
-
-        for block_index, block in enumerate(
-            blocks,
-            start=1,
-        ):
-
-            if block.has_src or block.language not in {
-                "ts",
-                "tsx",
-            }:
-                continue
-
-            suffix = ".tsx" if block.language == "tsx" else ".ts"
-
-            virtual_document = SourceDocument(
-                relative_path=(
-                    f"{document.relative_path}"
-                    f".__reference_"
-                    f"{block_index}"
-                    f"{suffix}"
-                ),
-                content=block.content,
-                language=("tsx" if block.language == "tsx" else "typescript"),
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="resolved",
+                target_symbol_ids=(definition.target_symbol_ids),
+                reason="import_binding",
             )
 
-            result = extractor.extract_references(
-                profile=profile,
-                document=virtual_document,
+        if definition.status == "external_module":
+
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="external",
+                reason=("external_import_binding"),
             )
 
-            for reference in result.references:
-                references.append(
-                    reference.model_copy(
-                        deep=True,
-                        update={
-                            "source_path": (document.relative_path),
-                            "line_number": (reference.line_number + block.line_offset),
-                        },
-                    )
-                )
+        if definition.status == "ambiguous_export":
 
-            for issue in result.issues:
-                issues.append(
-                    issue.model_copy(
-                        deep=True,
-                        update={
-                            "line_number": (
-                                (issue.line_number + block.line_offset)
-                                if (issue.line_number is not None)
-                                else None
-                            )
-                        },
-                    )
-                )
+            return self._result(
+                occurrence=occurrence,
+                source_symbol_id=(source_symbol_id),
+                status="ambiguous",
+                reason=(definition.reason),
+            )
 
-        return SymbolReferenceExtractionResult(
-            adapter_id=self.adapter_id,
-            relative_path=(document.relative_path),
-            references=references,
-            issues=issues,
+        return self._result(
+            occurrence=occurrence,
+            source_symbol_id=(source_symbol_id),
+            status="unresolved",
+            reason=("definition_" + definition.status),
+        )
+
+    @staticmethod
+    def _result(
+        *,
+        occurrence: SymbolReferenceOccurrence,
+        source_symbol_id: str | None,
+        status: str,
+        target_symbol_ids: list[str] | None = None,
+        reason: str | None = None,
+    ) -> ResolvedSymbolReference:
+
+        return ResolvedSymbolReference(
+            source_path=(occurrence.source_path),
+            reference_kind=(occurrence.reference_kind),
+            expression_text=(occurrence.expression_text),
+            line_number=(occurrence.line_number),
+            source_symbol_id=(source_symbol_id),
+            status=status,
+            target_symbol_ids=(target_symbol_ids or []),
+            reason=reason,
         )

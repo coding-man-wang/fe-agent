@@ -4,6 +4,11 @@ from agent_core.code_intelligence.adapters.typescript import (
 from agent_core.code_intelligence.adapters.typescript_imports import (
     TypeScriptImportBindingExtractorAdapter,
 )
+from agent_core.code_intelligence.adapters.typescript_exports import (
+    TypeScriptModuleExportExtractor,
+)
+from agent_core.code_intelligence.adapters.vue import VueSfcSymbolExtractorAdapter
+from agent_core.code_intelligence.module_export import ModuleExportTable
 from agent_core.code_intelligence.definition_resolver import (
     SymbolDefinitionResolver,
 )
@@ -24,6 +29,25 @@ def make_profile():
         frameworks=[
             "vue",
         ],
+    )
+
+
+def orders_document():
+    return SourceDocument(
+        relative_path="src/api/orders.ts",
+        language="typescript",
+        content="export function listOrders() {\n  return []\n}",
+    )
+
+
+def orders_export_table():
+    return ModuleExportTable.build(
+        [
+            TypeScriptModuleExportExtractor().extract_module_exports(
+                profile=make_profile(),
+                document=orders_document(),
+            )
+        ]
     )
 
 
@@ -113,15 +137,7 @@ def test_alias_import_resolves_to_exported_symbol():
 
     orders_result = symbol_adapter.extract_symbols(
         profile=profile,
-        document=SourceDocument(
-            relative_path=("src/api/orders.ts"),
-            language="typescript",
-            content="""
-export function listOrders() {
-  return []
-}
-""".strip(),
-        ),
+        document=orders_document(),
     )
 
     consumer = SourceDocument(
@@ -147,6 +163,7 @@ import {
 
     resolver = SymbolDefinitionResolver(
         symbol_index=index,
+        export_table=orders_export_table(),
         file_paths={
             "src/api/orders.ts",
             "src/views/orders.ts",
@@ -183,6 +200,7 @@ import {
 
     resolver = SymbolDefinitionResolver(
         symbol_index=(SymbolIndex()),
+        export_table=ModuleExportTable(),
         file_paths={
             "src/main.ts",
         },
@@ -212,6 +230,7 @@ import {
 
     resolver = SymbolDefinitionResolver(
         symbol_index=(SymbolIndex()),
+        export_table=ModuleExportTable(),
         file_paths={
             "src/main.ts",
         },
@@ -231,15 +250,7 @@ def test_vue_import_resolves_to_typescript_definition():
 
     orders_result = ts_adapter.extract_symbols(
         profile=profile,
-        document=SourceDocument(
-            relative_path=("src/api/orders.ts"),
-            language="typescript",
-            content="""
-export function listOrders() {
-  return []
-}
-""".strip(),
-        ),
+        document=orders_document(),
     )
 
     vue_document = SourceDocument(
@@ -272,6 +283,7 @@ async function loadOrders() {
 
     resolver = SymbolDefinitionResolver(
         symbol_index=index,
+        export_table=orders_export_table(),
         file_paths={
             "src/api/orders.ts",
             ("src/views/" "OrdersView.vue"),

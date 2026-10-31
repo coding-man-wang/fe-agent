@@ -529,6 +529,10 @@ class SymbolReferenceOccurrence(BaseModel):
         min_length=1,
     )
 
+    receiver_name: str | None = None
+
+    member_name: str | None = None
+
     line_number: int = Field(
         ge=1,
     )

@@ -88,6 +88,23 @@ class ContextRenderer:
                     "end_line": item.end_line,
                     "content": item.content,
                     "relevance_reasons": item.relevance_reasons,
+                    **(
+                        {
+                            "symbol_evidence": {
+                                "purpose": "read_context_only",
+                                "permission_note": (
+                                    "符号名称和图关系只说明阅读相关性，"
+                                    "不授予文件修改权限。"
+                                ),
+                                "candidates": [
+                                    symbol.model_dump(mode="json")
+                                    for symbol in item.symbol_candidates
+                                ],
+                            }
+                        }
+                        if item.symbol_candidates
+                        else {}
+                    ),
                 }
                 for item in bundle.code_context
             ],

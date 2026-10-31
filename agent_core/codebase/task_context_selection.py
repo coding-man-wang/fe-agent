@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from agent_core.codebase.chunker import (
     CodeChunker,
 )
@@ -27,10 +27,21 @@ from agent_core.codebase.semantic_search import (
 from agent_core.codebase.task_retrieval import (
     TaskRetrievalService,
 )
+from agent_core.codebase.symbol_retrieval_model import SymbolCandidate
 from agent_core.sdd.model import (
     RequirementSpec,
     TaskDefinition,
 )
+
+if TYPE_CHECKING:
+    from agent_core.code_intelligence.repository_snapshot import (
+        RepositorySymbolSnapshotBuilder,
+    )
+    from agent_core.codebase.symbol_retrieval import (
+        SymbolRanker,
+        SymbolGraphExpander,
+        SymbolResultFusion,
+    )
 
 ContextRetrievalMode = Literal[
     "hybrid",
@@ -73,6 +84,11 @@ class TaskContextSelectionResult:
 
     semantic_error: str | None
 
+    symbol_candidates: list[SymbolCandidate] = field(default_factory=list)
+    symbol_issues: list[str] = field(default_factory=list)
+    symbol_error: str | None = None
+    symbol_added_files: list[str] = field(default_factory=list)
+
 
 class TaskContextSelectionService:
     """
@@ -103,6 +119,11 @@ class TaskContextSelectionService:
         graph_expander: RepositoryGraphContextExpander | None = None,
         code_chunker: CodeChunker | None = None,
         semantic_index: InMemorySemanticIndex | None = None,
+        enable_symbol_retrieval: bool = False,
+        symbol_snapshot_builder: RepositorySymbolSnapshotBuilder | None = None,
+        symbol_ranker: SymbolRanker | None = None,
+        symbol_expander: SymbolGraphExpander | None = None,
+        symbol_fusion: SymbolResultFusion | None = None,
     ) -> None:
 
         # 语义搜索需要：
@@ -131,6 +152,25 @@ class TaskContextSelectionService:
         self.code_chunker = code_chunker
 
         self.semantic_index = semantic_index
+
+        self.enable_symbol_retrieval = enable_symbol_retrieval
+        if enable_symbol_retrieval:
+            # 延迟加载：关闭符号检索时不增加旧链路的解析器依赖。
+            from agent_core.code_intelligence.repository_snapshot import (
+                RepositorySymbolSnapshotBuilder,
+            )
+            from agent_core.codebase.symbol_retrieval import (
+                SymbolRanker,
+                SymbolGraphExpander,
+                SymbolResultFusion,
+            )
+
+            self.symbol_snapshot_builder = (
+                symbol_snapshot_builder or RepositorySymbolSnapshotBuilder()
+            )
+            self.symbol_ranker = symbol_ranker or SymbolRanker()
+            self.symbol_expander = symbol_expander or SymbolGraphExpander()
+            self.symbol_fusion = symbol_fusion or SymbolResultFusion()
 
         # 当前语义索引对应哪个 Commit。
         #
@@ -236,6 +276,49 @@ class TaskContextSelectionService:
             graph=graph,
         )
 
+        # 原文件链路先完整执行，符号证据不得改变其候选、重排或图扩展。
+        # 这也避免在上游融合后再次 top-k 截断而丢失原有文件。
+        symbol_candidates = []
+        symbol_issues = []
+        symbol_error = None
+        symbol_added_files = []
+        if self.enable_symbol_retrieval:
+            try:
+                baseline_paths = {
+                    item.relative_path for item in selection.selected_files
+                }
+                snapshot = self.symbol_snapshot_builder.build(
+                    file_index=index,
+                    repository_revision=revision,
+                )
+                if snapshot.repository_revision != revision:
+                    raise ValueError("符号快照版本与当前代码版本不一致")
+                symbol_issues = list(snapshot.issues)
+                ranked = self.symbol_ranker.rank(
+                    queries=[query.text for query in query_specs],
+                    symbol_index=snapshot.symbol_index,
+                )
+                symbol_candidates = self.symbol_expander.expand(
+                    candidates=ranked,
+                    symbol_index=snapshot.symbol_index,
+                    symbol_graph=snapshot.symbol_graph,
+                )
+                selection = self.symbol_fusion.fuse(
+                    selection=selection.model_copy(deep=True),
+                    index=index,
+                    candidates=symbol_candidates,
+                    max_files=self.graph_expander.max_files,
+                    max_total_bytes=self.retrieval_service.max_total_bytes,
+                )
+                symbol_added_files = [
+                    item.relative_path
+                    for item in selection.selected_files
+                    if item.relative_path not in baseline_paths
+                ]
+            except Exception as exc:
+                # 可选补充链路失败时保留完整文件基线，并显式报告降级原因。
+                symbol_error = f"{type(exc).__name__}: {exc}"
+
         return TaskContextSelectionResult(
             repository_revision=revision,
             index=index,
@@ -244,6 +327,10 @@ class TaskContextSelectionService:
             selection=selection,
             retrieval_mode=retrieval_mode,
             semantic_error=semantic_error,
+            symbol_candidates=symbol_candidates,
+            symbol_issues=symbol_issues,
+            symbol_error=symbol_error,
+            symbol_added_files=symbol_added_files,
         )
 
     async def _ensure_semantic_index(

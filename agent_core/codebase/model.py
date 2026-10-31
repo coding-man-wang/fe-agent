@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from agent_core.codebase.symbol_retrieval_model import SymbolCandidate
 
 
 class RepositoryProfile(BaseModel):
@@ -316,6 +317,8 @@ TargetMatchType = Literal[
 
 
 class HybridRelevantFile(BaseModel):
+    symbol_candidates: list[SymbolCandidate] = Field(default_factory=list)
+
     relative_path: str = Field(description="相关文件路径")
 
     category: str = Field(description="文件分类")

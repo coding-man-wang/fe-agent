@@ -10,6 +10,12 @@ from agent_core.code_intelligence.symbol_index import (
 from agent_core.codebase.graph.resolver import (
     ModulePathResolver,
 )
+from agent_core.code_intelligence.module_export import (
+    ModuleExportTable,
+)
+from agent_core.code_intelligence.module_export_resolver import (
+    ModuleExportResolver,
+)
 
 
 class SymbolDefinitionResolver:
@@ -148,17 +154,6 @@ class SymbolDefinitionResolver:
         # v1.4.3B 正式解决。
         # ==================================
 
-        if binding.binding_kind == "default":
-            return SymbolDefinitionResolution(
-                source_path=(binding.source_path),
-                local_name=(binding.local_name),
-                imported_name=("default"),
-                module_specifier=(binding.module_specifier),
-                status="unsupported",
-                target_path=target_path,
-                reason=("default_export_resolution_" "requires_export_table"),
-            )
-
         imported_name = binding.imported_name
 
         if imported_name is None:
@@ -201,6 +196,83 @@ class SymbolDefinitionResolver:
             # import specifier 第一跳
             module_path=target_path,
             # 最终真实 definition file
+            target_path=(export_resolution.target_path),
+            target_symbol_ids=list(export_resolution.target_symbol_ids),
+            resolution_chain=list(export_resolution.resolution_chain),
+            reason=(export_resolution.reason),
+        )
+
+    def resolve_namespace_member(
+        self,
+        *,
+        binding: ImportBinding,
+        member_name: str,
+    ) -> SymbolDefinitionResolution:
+        """
+        解析：
+
+            import * as api from "@/api"
+
+            api.listOrders()
+
+        namespace import 本身只解析到 Module。
+
+        member_name 再通过 Module Export Table
+        定位最终 Symbol。
+        """
+
+        if binding.binding_kind != "namespace":
+            return SymbolDefinitionResolution(
+                source_path=binding.source_path,
+                local_name=binding.local_name,
+                imported_name=member_name,
+                module_specifier=(binding.module_specifier),
+                status="unsupported",
+                reason=("binding_is_not_namespace_import"),
+            )
+
+        module_resolution = self.module_resolver.resolve(
+            source_path=(binding.source_path),
+            specifier=(binding.module_specifier),
+        )
+
+        if module_resolution.kind == "external":
+            return SymbolDefinitionResolution(
+                source_path=(binding.source_path),
+                local_name=(binding.local_name),
+                imported_name=member_name,
+                module_specifier=(binding.module_specifier),
+                status="external_module",
+                reason="bare_module_specifier",
+            )
+
+        if (
+            module_resolution.kind != "internal"
+            or module_resolution.target_path is None
+        ):
+            return SymbolDefinitionResolution(
+                source_path=(binding.source_path),
+                local_name=(binding.local_name),
+                imported_name=member_name,
+                module_specifier=(binding.module_specifier),
+                status="unresolved_module",
+                reason=(module_resolution.reason),
+            )
+
+        module_path = module_resolution.target_path
+
+        export_resolution = self.export_resolver.resolve(
+            module_path=module_path,
+            export_name=member_name,
+        )
+
+        return SymbolDefinitionResolution(
+            source_path=(binding.source_path),
+            local_name=(binding.local_name),
+            imported_name=member_name,
+            module_specifier=(binding.module_specifier),
+            status=(export_resolution.status),
+            module_path=module_path,
             target_path=(export_resolution.target_path),
             target_symbol_ids=list(export_resolution.target_symbol_ids),
             resolution_chain=list(export_resolution.resolution_chain),

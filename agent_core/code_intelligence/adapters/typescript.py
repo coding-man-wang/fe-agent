@@ -39,6 +39,32 @@ _TYPESCRIPT_LANGUAGE = Language(ts_typescript.language_typescript())
 _TSX_LANGUAGE = Language(ts_typescript.language_tsx())
 
 
+def create_typescript_parser(
+    document: SourceDocument,
+) -> Parser:
+    """
+    TypeScript Adapter Layer 共享 Parser Factory。
+
+    Symbol Extraction /
+    Import Extraction /
+    Export Extraction /
+    Reference Extraction
+
+    都复用这一入口。
+
+    该函数必须位于 module scope，
+    因为多个 Technology Adapter
+    子模块需要直接 import。
+    """
+
+    suffix = PurePosixPath(document.relative_path).suffix.lower()
+
+    if suffix == ".tsx":
+        return Parser(_TSX_LANGUAGE)
+
+    return Parser(_TYPESCRIPT_LANGUAGE)
+
+
 class TypeScriptSymbolExtractorAdapter:
     """
     TypeScript / TSX Symbol Extraction Adapter。
@@ -140,30 +166,6 @@ class TypeScriptSymbolExtractorAdapter:
             symbols=symbols,
             issues=issues,
         )
-
-    # ==================================
-    # Parser Selection
-    # ==================================
-    def create_typescript_parser(
-        document: SourceDocument,
-    ) -> Parser:
-        """
-        TypeScript Adapter Layer 内部共享的
-        AST Parser Factory。
-
-        Symbol Extraction /
-        Import Extraction /
-        后续 Reference Extraction
-
-        都复用这一入口。
-        """
-
-        suffix = PurePosixPath(document.relative_path).suffix.lower()
-
-        if suffix == ".tsx":
-            return Parser(_TSX_LANGUAGE)
-
-        return Parser(_TYPESCRIPT_LANGUAGE)
 
     def _create_parser(
         self,

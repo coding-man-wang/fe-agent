@@ -131,6 +131,10 @@ class ProjectContextBuilder:
                 start_line=1,
                 end_line=len(content.splitlines()) or 1,
                 relevance_reasons=relevant_file.reasons,
+                symbol_candidates=[
+                    symbol.model_copy(deep=True)
+                    for symbol in relevant_file.symbol_candidates
+                ],
                 content_chars=len(content),
             )
 
@@ -148,6 +152,10 @@ class ProjectContextBuilder:
                 start_line=semantic_chunk.start_line,
                 end_line=semantic_chunk.end_line,
                 relevance_reasons=relevant_file.reasons,
+                symbol_candidates=[
+                    symbol.model_copy(deep=True)
+                    for symbol in relevant_file.symbol_candidates
+                ],
                 content_chars=len(chunk_content),
             )
 
@@ -162,5 +170,9 @@ class ProjectContextBuilder:
             start_line=1,
             end_line=None,
             relevance_reasons=(relevant_file.reasons),
+            symbol_candidates=[
+                symbol.model_copy(deep=True)
+                for symbol in relevant_file.symbol_candidates
+            ],
             content_chars=len(truncated),
         )

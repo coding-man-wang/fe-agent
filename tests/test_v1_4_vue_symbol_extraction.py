@@ -167,12 +167,12 @@ function loadOrders() {
 
     # 原始 Vue 文件：
     #
-    # 7: const selectedStatus...
-    # 9: function loadOrders...
+    # 8: const selectedStatus...
+    # 10: function loadOrders...
     #
-    assert by_name["selectedStatus"].start_line == 7
+    assert by_name["selectedStatus"].start_line == 8
 
-    assert by_name["loadOrders"].start_line == 9
+    assert by_name["loadOrders"].start_line == 10
 
 
 def test_normal_script_and_script_setup_can_coexist():
