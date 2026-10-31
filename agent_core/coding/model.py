@@ -136,6 +136,27 @@ class ExecutionObligationCoverage(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class ExecutionObligationReviewResult(BaseModel):
+    """
+    Bounded Execution Obligation Review
+    的唯一允许输出。
+
+    Review 不允许重新生成：
+
+    - findings
+    - proposed_changes
+    - evidence_gaps
+    - verification_plan
+
+    只重新判断：
+        obligation_coverage
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    obligation_coverage: list[ExecutionObligationCoverage] = Field(default_factory=list)
+
+
 class ReadOnlyCodingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

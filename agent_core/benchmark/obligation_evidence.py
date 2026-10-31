@@ -560,28 +560,57 @@ class ObligationEvidenceEnricher:
 
         return None
 
-    # ==================================
-    # File Helpers
-    # ==================================
-
     def _safe_read(
         self,
         path: Path,
     ) -> str | None:
+        """
+        使用与 ExecutionPreparer 相同的
+        Text IO 语义读取 Repository Source。
+
+        重要：
+
+        不使用：
+
+            read_bytes().decode("utf-8")
+
+        原因：
+
+        Windows Repository 文件可能使用：
+
+            CRLF: \\r\\n
+
+        read_bytes().decode()
+            → 保留 \\r\\n
+
+        Path.read_text()
+            → universal newline
+            → 统一为 \\n
+
+        ExecutionPreparer 同样使用
+        Path.read_text()。
+
+        因此 Context Evidence 和后续
+        Freshness Validation 必须使用
+        相同的 canonical text representation。
+        """
 
         try:
-            data = path.read_bytes()
+            size_bytes = path.stat().st_size
 
         except OSError:
             return None
 
-        if len(data) > self.max_file_bytes:
+        if size_bytes > self.max_file_bytes:
             return None
 
         try:
-            return data.decode("utf-8")
+            return path.read_text(encoding="utf-8")
 
-        except UnicodeDecodeError:
+        except (
+            UnicodeDecodeError,
+            OSError,
+        ):
             return None
 
     @staticmethod

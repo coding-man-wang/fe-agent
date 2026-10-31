@@ -389,6 +389,142 @@ JSON 必须符合以下结构：
     仍然必须严格遵守原始 Coding Analysis JSON 契约。
     """.strip()
 
+    EXECUTION_OBLIGATION_REVIEW_INSTRUCTION = """
+    你正在执行一次：
+
+    Bounded Execution Obligation Review
+
+    这不是新的 Coding Analysis，
+    也不是 Replan。
+
+    当前 Coding Analysis 已经完成，
+    Harness 发现至少一个：
+
+        execution_obligation
+
+    被标记为：
+
+        unresolved
+
+    你的唯一任务是重新判断这些
+    Execution Obligations 的 coverage。
+
+    你必须基于原始 Task Context 中已经提供的：
+
+    - Requirement
+    - Acceptance Criteria
+    - TechnicalSpec
+    - Current Repository Code Context
+    - Domain Types
+    - Existing Repository Patterns
+    - Similar Implementations
+    - Engineering Rules
+    - Change Surface
+
+    进行复核。
+
+    特别注意：
+
+    1. 必须区分：
+
+       Existing External Contract Unknown
+
+       和
+
+       Implementation Detail To Be Designed
+
+    2. 如果确实存在一个外部系统已经定义、
+       当前 Repository 无法推断，
+       并且实现错误会违反真实外部 Contract，
+       应继续：
+
+           unresolved
+
+    3. 如果 Requirement 已经定义业务语义，
+       Domain Type 已经定义合法值，
+       Repository 又存在 Same-layer Pattern，
+       而当前工作本身就是新增该 Feature，
+       不得仅因为“历史上没有 /orders 的现成实现”
+       就自动判断：
+
+           unresolved
+
+    4. Similar Implementation
+       不能被当作外部 API 文档。
+
+       但是它可以作为：
+
+           Repository Implementation Convention
+
+       的证据。
+
+    5. 对 Filter State 和 Domain State：
+
+       如果：
+
+           all
+
+       是 UI Filter State，
+
+       Domain Type 中不存在 all，
+
+       则应该优先保持语义：
+
+           all
+           =
+           不应用具体 Domain Filter
+
+       而不是把 all 编造成 Domain Status。
+
+    6. 不得因为缺少运行测试结果
+       就将 Obligation 标记 unresolved。
+
+       Runtime Verification 属于后续阶段。
+
+    7. 你不能：
+       - 增加 proposed_changes
+       - 删除 proposed_changes
+       - 修改 Change Surface
+       - 新增文件
+       - 修改 findings
+       - 修改 evidence_gaps
+       - 修改 verification_plan
+
+    8. 你只返回：
+
+    {
+      "obligation_coverage": [
+        {
+          "obligation_id": "...",
+          "status":
+            "satisfied_by_current_code"
+            或
+            "addressed_by_proposed_change"
+            或
+            "unresolved",
+          "related_paths": [],
+          "reason": "..."
+        }
+      ]
+    }
+
+    9. 必须返回所有原有
+       execution_obligations，
+       每个 obligation 恰好一次。
+
+    10. 对之前已经不是 unresolved
+        的 obligation，
+        必须保持原结论不变。
+
+    11. 只有之前 unresolved 的 obligation
+        可以重新分类。
+
+    12. 如果复核后仍然没有足够 Evidence，
+        必须保持 unresolved。
+
+    不要为了让 Harness 通过而降低安全标准。
+    """.strip()
+
     @staticmethod
     def _normalize_evidence_layout(
         text: str,
@@ -1190,3 +1326,148 @@ JSON 必须符合以下结构：
             ),
             user_message=(messages.user_message),
         )
+
+    def prepare_execution_obligation_review_messages(
+        self,
+        *,
+        messages: RenderedContext,
+        previous_result: ReadOnlyCodingResult,
+        unresolved_ids: list[str],
+    ) -> RenderedContext:
+        """
+        为被 Obligation Gate 阻断的
+        Coding Analysis 创建一次
+        Bounded Review Prompt。
+
+        Repository Context 不变化。
+
+        Review 只重新判断：
+            obligation_coverage
+        """
+
+        previous_coverage = [
+            item.model_dump(mode="json") for item in previous_result.obligation_coverage
+        ]
+
+        review_context = f"""
+    当前需要复核的 unresolved obligation IDs：
+
+    {unresolved_ids}
+
+    上一轮 obligation_coverage：
+
+    {previous_coverage}
+    """.strip()
+
+        return RenderedContext(
+            system_message=(
+                messages.system_message
+                + "\n\n"
+                + self.EXECUTION_OBLIGATION_REVIEW_INSTRUCTION
+                + "\n\n"
+                + review_context
+            ),
+            user_message=(messages.user_message),
+        )
+
+    async def review_execution_obligations(
+        self,
+        *,
+        bundle: TaskContextBundle,
+        messages: RenderedContext,
+        previous_result: ReadOnlyCodingResult,
+        unresolved_ids: list[str],
+    ) -> ReadOnlyCodingResult:
+        """
+        只允许重新判断 unresolved
+        Execution Obligation Coverage。
+
+        不允许重新进行 Coding Decision。
+        """
+
+        if not unresolved_ids:
+            return previous_result
+
+        raw_output = await self.model.complete(
+            system_message=(messages.system_message),
+            user_message=(messages.user_message),
+        )
+
+        try:
+            review = ExecutionObligationReviewResult.model_validate_json(raw_output)
+
+        except ValidationError as exc:
+            raise CodingOutputError(
+                "Execution Obligation Review "
+                "返回非法结构: " + self._format_validation_errors(exc)
+            ) from exc
+
+        original_by_id = {
+            item.obligation_id: item for item in (previous_result.obligation_coverage)
+        }
+
+        reviewed_by_id = {
+            item.obligation_id: item for item in (review.obligation_coverage)
+        }
+
+        # ==================================
+        # Coverage Identity Boundary
+        # ==================================
+
+        if set(original_by_id) != set(reviewed_by_id):
+            raise CodingOutputError(
+                "Execution Obligation Review " "不得增加、删除或替换 " "obligation_id"
+            )
+
+        unresolved_set = set(unresolved_ids)
+
+        # ==================================
+        # 已经 satisfied 的 Obligation
+        # 不允许 Review 偷偷修改。
+        # ==================================
+
+        for (
+            obligation_id,
+            original,
+        ) in original_by_id.items():
+
+            if obligation_id in unresolved_set:
+                continue
+
+            reviewed = reviewed_by_id[obligation_id]
+
+            if reviewed != original:
+                raise CodingOutputError(
+                    "Execution Obligation Review "
+                    "不得修改已经确认的 "
+                    "obligation coverage: "
+                    f"{obligation_id}"
+                )
+
+        # ==================================
+        # 合并：
+        #
+        # ReadOnlyCodingResult 的其他字段
+        # 完全保持第一次分析结果。
+        # ==================================
+
+        reviewed_result = previous_result.model_copy(
+            deep=True,
+            update={"obligation_coverage": (review.obligation_coverage)},
+        )
+
+        # ==================================
+        # 仍然经过完整 Coding Contract
+        #
+        # 例如：
+        #
+        # addressed_by_proposed_change
+        # 必须指向 proposed_changes。
+        # ==================================
+
+        self._validate_result(
+            bundle=bundle,
+            result=reviewed_result,
+        )
+
+        return reviewed_result

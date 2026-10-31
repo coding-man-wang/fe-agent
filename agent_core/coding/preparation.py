@@ -61,6 +61,7 @@ class ExecutionPreparer:
         task_id: str,
         artifact_id: str,
         bundle: TaskContextBundle,
+        messages: RenderedContext | None = None,
     ) -> ExecutionPreparation:
 
         # 1. 读取并校验 Artifact。
@@ -78,10 +79,28 @@ class ExecutionPreparer:
         if artifact.result.execution_status != "not_executed":
             raise PreparationError("分析结果不能声明已经执行")
 
-        # 3. 用实际消息格式重新计算 Hash。
-        messages = self.message_provider.prepare_messages(bundle)
+        # ==================================
+        # Final Analysis Message Identity
+        #
+        # 如果 Coding Analysis 经过：
+        #
+        # - Runtime Reconciliation Review
+        # - Execution Obligation Review
+        #
+        # Artifact 必须绑定真正产生最终
+        # Analysis 的那份 Messages。
+        #
+        # 普通调用保持 backward compatible，
+        # 仍可以重新 render 基础 Context。
+        # ==================================
 
-        actual_context_hash = calculate_messages_hash(messages)
+        actual_messages = (
+            messages
+            if messages is not None
+            else (self.message_provider.prepare_messages(bundle))
+        )
+
+        actual_context_hash = calculate_messages_hash(actual_messages)
 
         if actual_context_hash != artifact.context_hash:
             raise PreparationError("Context Hash 不一致：" "当前上下文与分析时不同")

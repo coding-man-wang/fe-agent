@@ -969,29 +969,6 @@ class FullExecutionBenchmarkService:
                     )
 
                     # ==================================
-                    # Execution Obligation
-                    # Evidence Enrichment
-                    #
-                    # Compression 把多个 Logical Task
-                    # 合并后，Context 必须同时保留
-                    # 能支撑这些 Obligation 的
-                    # Repository Patterns。
-                    #
-                    # 新增文件只是 Read Context，
-                    # 不会进入 Change Surface。
-                    # ==================================
-
-                    if task.task_type == "code_change" and getattr(
-                        task,
-                        "execution_obligations",
-                        [],
-                    ):
-                        bundle = obligation_evidence_enricher.enrich(
-                            repository_root=(analysis_root),
-                            bundle=bundle,
-                        )
-
-                    # ==================================
                     # Effective Engineering Policy
                     #
                     # Policy 决定：
@@ -1152,20 +1129,7 @@ class FullExecutionBenchmarkService:
 
                     # ==================================
                     # v1.3C
-                    #
-                    # Compressed Execution
-                    # Obligation Gate
-                    #
-                    # Compression 可以减少
-                    # Runtime Task 数量，
-                    # 但不能丢掉 Logical Task
-                    # 的执行义务。
-                    # ==================================
-
-                    # ==================================
-                    # v1.3C
-                    # Compressed Execution
-                    # Obligation Gate
+                    # Execution Obligation Gate
                     # ==================================
 
                     obligation_decision = execution_obligation_gate.evaluate(
@@ -1174,17 +1138,59 @@ class FullExecutionBenchmarkService:
                     )
 
                     # ==================================
+                    # Bounded Execution Obligation Review
+                    #
+                    # 第一次 Analysis 已经完成。
+                    #
+                    # 如果 Compression Obligation
+                    # 唯一问题是 unresolved，
+                    # 在任何 Side Effect 前允许：
+                    #
+                    #     Review × 1
+                    #
+                    # 注意：
+                    #
+                    # Review 不能修改 Coding Proposal，
+                    # 只能重新判断 obligation_coverage。
+                    # ==================================
+
+                    if not obligation_decision.allowed and (
+                        obligation_decision.unresolved_obligation_ids
+                    ):
+                        obligation_review_messages = (
+                            coding_agent.prepare_execution_obligation_review_messages(
+                                messages=(analysis_messages),
+                                previous_result=analysis,
+                                unresolved_ids=(
+                                    obligation_decision.unresolved_obligation_ids
+                                ),
+                            )
+                        )
+
+                        analysis = await coding_agent.review_execution_obligations(
+                            bundle=bundle,
+                            messages=(obligation_review_messages),
+                            previous_result=analysis,
+                            unresolved_ids=(
+                                obligation_decision.unresolved_obligation_ids
+                            ),
+                        )
+
+                        # 最终 Analysis 确实经过了
+                        # 这一份 Review Message，
+                        # 因此 Artifact Identity
+                        # 也应该绑定最终消息。
+                        analysis_messages = obligation_review_messages
+
+                        analysis_attempts += 1
+
+                        obligation_decision = execution_obligation_gate.evaluate(
+                            task=task,
+                            analysis=analysis,
+                        )
+
+                    # ==================================
                     # Observability First
-                    #
-                    # Gate 即使失败，
-                    # Run Record 也必须保留：
-                    #
-                    # expected
-                    # satisfied
-                    # unresolved
-                    #
-                    # 否则失败 Trace 无法解释
-                    # Harness 为什么阻断。
                     # ==================================
 
                     task_record = task_record.model_copy(
@@ -1297,7 +1303,6 @@ class FullExecutionBenchmarkService:
                     # ==================================
                     # Patch Proposal
                     # ==================================
-
                     preparation = ExecutionPreparer(
                         repository_root=(analysis_root),
                         artifact_store=(analysis_store),
@@ -1306,6 +1311,9 @@ class FullExecutionBenchmarkService:
                         task_id=(task.task_id),
                         artifact_id=(artifact.artifact_id),
                         bundle=bundle,
+                        # 必须使用产生最终 Analysis
+                        # 的实际消息。
+                        messages=(analysis_messages),
                     )
 
                     try:
