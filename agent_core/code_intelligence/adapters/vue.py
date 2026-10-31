@@ -15,6 +15,9 @@ from agent_core.code_intelligence.model import (
     SymbolExtractionResult,
     TechnologyProfile,
 )
+from agent_core.code_intelligence.adapters.typescript_imports import (
+    TypeScriptImportBindingExtractorAdapter,
+)
 
 VueScriptKind = Literal[
     "script",
@@ -84,6 +87,8 @@ class VueSfcSymbolExtractorAdapter:
             typescript_adapter or TypeScriptSymbolExtractorAdapter()
         )
 
+        self._typescript_import_extractor = TypeScriptImportBindingExtractorAdapter()
+
     # ==================================
     # Adapter Selection
     # ==================================
@@ -106,6 +111,103 @@ class VueSfcSymbolExtractorAdapter:
         # 保留在 Adapter Boundary 内，
         # 不泄漏给 SymbolIndex / Retrieval。
         return profile.has("vue") or profile.has("nuxt")
+
+    def extract_module_exports(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> ModuleExportExtractionResult:
+
+        if not self.supports(
+            profile=profile,
+            document=document,
+        ):
+            raise ValueError("Vue Adapter 不支持该文件: " + document.relative_path)
+
+        component_name = PurePosixPath(document.relative_path).stem
+
+        exports: list[ModuleExportBinding] = [
+            # ==================================
+            # Vue SFC implicit default export
+            # ==================================
+            ModuleExportBinding(
+                source_path=(document.relative_path),
+                binding_kind="local",
+                exported_name="default",
+                local_name=component_name,
+                line_number=1,
+                synthetic=True,
+            )
+        ]
+
+        issues: list[CodeIntelligenceIssue] = []
+
+        blocks = self._extract_script_blocks(document.content)
+
+        ts_export_extractor = TypeScriptModuleExportExtractor()
+
+        for block_index, block in enumerate(
+            blocks,
+            start=1,
+        ):
+
+            # <script setup>
+            # 不承担普通 ES Module Export。
+            if block.kind == "script_setup":
+                continue
+
+            if block.has_src or block.language not in {
+                "ts",
+                "tsx",
+            }:
+                continue
+
+            suffix = ".tsx" if block.language == "tsx" else ".ts"
+
+            virtual_document = SourceDocument(
+                relative_path=(
+                    f"{document.relative_path}"
+                    f".__export_"
+                    f"{block_index}"
+                    f"{suffix}"
+                ),
+                content=block.content,
+                language=("tsx" if block.language == "tsx" else "typescript"),
+            )
+
+            result = ts_export_extractor.extract_module_exports(
+                profile=profile,
+                document=virtual_document,
+            )
+
+            for item in result.exports:
+
+                # .vue Module 的 default export
+                # 永远指向 SFC Component。
+                #
+                # 普通 <script> 中 compiler-facing
+                # default export 不作为第二个独立
+                # repository default Symbol。
+                if item.exported_name == "default":
+                    continue
+
+                exports.append(
+                    item.model_copy(
+                        deep=True,
+                        update={
+                            "source_path": (document.relative_path),
+                            "line_number": (item.line_number + block.line_offset),
+                        },
+                    )
+                )
+
+        return ModuleExportExtractionResult(
+            adapter_id=self.adapter_id,
+            relative_path=(document.relative_path),
+            exports=exports,
+            issues=issues,
+        )
 
     # ==================================
     # Public Extraction
@@ -621,3 +723,94 @@ class VueSfcSymbolExtractorAdapter:
             return None
 
         return match.group(1) if (match.group(1) is not None) else match.group(2)
+
+    def extract_import_bindings(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> ImportBindingExtractionResult:
+        """
+        Vue SFC
+            ↓
+        Embedded TS
+            ↓
+        TypeScript Import Binding
+            ↓
+        remap source_path / line
+            ↓
+        Vue Repository Binding
+        """
+
+        if not self.supports(
+            profile=profile,
+            document=document,
+        ):
+            raise ValueError("Vue Adapter 不支持该文件: " + document.relative_path)
+
+        bindings: list[ImportBinding] = []
+
+        issues: list[CodeIntelligenceIssue] = []
+
+        blocks = self._extract_script_blocks(document.content)
+
+        for block_index, block in enumerate(
+            blocks,
+            start=1,
+        ):
+
+            if block.has_src or block.language not in {
+                "ts",
+                "tsx",
+            }:
+                continue
+
+            suffix = ".tsx" if block.language == "tsx" else ".ts"
+
+            virtual_document = SourceDocument(
+                relative_path=(
+                    f"{document.relative_path}"
+                    f".__import_block_"
+                    f"{block_index}"
+                    f"{suffix}"
+                ),
+                content=block.content,
+                language=("tsx" if block.language == "tsx" else "typescript"),
+            )
+
+            result = self._typescript_import_extractor.extract_import_bindings(
+                profile=profile,
+                document=(virtual_document),
+            )
+
+            for binding in result.bindings:
+                bindings.append(
+                    binding.model_copy(
+                        deep=True,
+                        update={
+                            "source_path": (document.relative_path),
+                            "line_number": (binding.line_number + block.line_offset),
+                        },
+                    )
+                )
+
+            for issue in result.issues:
+                issues.append(
+                    issue.model_copy(
+                        deep=True,
+                        update={
+                            "line_number": (
+                                (issue.line_number + block.line_offset)
+                                if (issue.line_number is not None)
+                                else None
+                            )
+                        },
+                    )
+                )
+
+        return ImportBindingExtractionResult(
+            adapter_id=self.adapter_id,
+            relative_path=(document.relative_path),
+            bindings=bindings,
+            issues=issues,
+        )

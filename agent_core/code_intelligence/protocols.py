@@ -5,6 +5,11 @@ from agent_core.code_intelligence.model import (
     SymbolExtractionResult,
     TechnologyProfile,
 )
+from agent_core.code_intelligence.model import (
+    ImportBindingExtractionResult,
+    SourceDocument,
+    TechnologyProfile,
+)
 
 
 class SymbolExtractorAdapter(Protocol):
@@ -48,3 +53,60 @@ class SymbolExtractorAdapter(Protocol):
         profile: TechnologyProfile,
         document: SourceDocument,
     ) -> SymbolExtractionResult: ...
+
+
+class ImportBindingExtractorAdapter(Protocol):
+    """
+    Module Import Binding Extraction。
+
+    和 Symbol Extraction 分开定义，
+    防止形成 Fat Interface。
+    """
+
+    @property
+    def adapter_id(
+        self,
+    ) -> str: ...
+
+    def supports(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> bool: ...
+
+    def extract_import_bindings(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> ImportBindingExtractionResult: ...
+
+
+class SymbolReferenceExtractorAdapter(Protocol):
+    """
+    Source
+        ↓
+    Reference Occurrence[]
+
+    不负责 Definition Resolution。
+    """
+
+    @property
+    def adapter_id(
+        self,
+    ) -> str: ...
+
+    def supports(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> bool: ...
+
+    def extract_references(
+        self,
+        *,
+        profile: TechnologyProfile,
+        document: SourceDocument,
+    ) -> SymbolReferenceExtractionResult: ...

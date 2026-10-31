@@ -228,3 +228,402 @@ class SymbolExtractionResult(BaseModel):
     issues: list[CodeIntelligenceIssue] = Field(
         default_factory=list,
     )
+
+
+ImportBindingKind = Literal[
+    "named",
+    "default",
+    "namespace",
+    "side_effect",
+]
+
+
+class ImportBinding(BaseModel):
+    """
+    一个 source file 中的
+    Module Import Binding。
+
+    示例：
+
+        import {
+            listOrders as fetchOrders
+        } from "@/api/orders"
+
+    imported_name:
+        listOrders
+
+    local_name:
+        fetchOrders
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    source_path: str = Field(
+        min_length=1,
+    )
+
+    module_specifier: str = Field(
+        min_length=1,
+    )
+
+    binding_kind: ImportBindingKind
+
+    imported_name: str | None = None
+
+    local_name: str | None = None
+
+    type_only: bool = False
+
+    line_number: int = Field(
+        ge=1,
+    )
+
+
+class ImportBindingExtractionResult(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    adapter_id: str = Field(
+        min_length=1,
+    )
+
+    relative_path: str = Field(
+        min_length=1,
+    )
+
+    bindings: list[ImportBinding] = Field(
+        default_factory=list,
+    )
+
+    issues: list[CodeIntelligenceIssue] = Field(
+        default_factory=list,
+    )
+
+
+DefinitionResolutionStatus = Literal[
+    "resolved",
+    "module_only",
+    "external_module",
+    "unresolved_module",
+    "symbol_not_found",
+    "unsupported",
+    "export_not_found",
+    "ambiguous_export",
+    "cyclic_export",
+]
+
+
+class SymbolDefinitionResolution(BaseModel):
+    """
+    Import Binding 的 Definition Resolution。
+
+    注意：
+
+    Resolution 只是代码理解结果。
+
+    它不是：
+        Change Surface
+        Write Permission
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    source_path: str
+
+    local_name: str | None = None
+
+    imported_name: str | None = None
+
+    module_specifier: str
+
+    status: DefinitionResolutionStatus
+
+    target_path: str | None = None
+
+    target_symbol_ids: list[str] = Field(
+        default_factory=list,
+    )
+
+    reason: str | None = None
+
+    module_path: str | None = None
+
+    resolution_chain: list[str] = Field(
+        default_factory=list,
+    )
+
+
+ModuleExportBindingKind = Literal[
+    "local",
+    "reexport",
+    "star_reexport",
+]
+
+
+class ModuleExportBinding(BaseModel):
+    """
+    Module 对外暴露的一个 Export Binding。
+
+    示例：
+
+        export { listOrders as fetchOrders }
+
+    exported_name:
+        fetchOrders
+
+    local_name:
+        listOrders
+
+
+        export {
+            listOrders as fetchOrders
+        } from "./orders"
+
+    exported_name:
+        fetchOrders
+
+    imported_name:
+        listOrders
+
+    module_specifier:
+        ./orders
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    source_path: str = Field(
+        min_length=1,
+    )
+
+    binding_kind: ModuleExportBindingKind
+
+    exported_name: str | None = None
+
+    local_name: str | None = None
+
+    module_specifier: str | None = None
+
+    imported_name: str | None = None
+
+    type_only: bool = False
+
+    line_number: int = Field(
+        ge=1,
+    )
+
+    # Vue Component implicit default export
+    # 等 Adapter 生成的语义可标记 synthetic。
+    synthetic: bool = False
+
+    @model_validator(mode="after")
+    def validate_binding(
+        self,
+    ) -> "ModuleExportBinding":
+
+        if self.binding_kind == "local":
+
+            if not self.exported_name:
+                raise ValueError("local export 必须提供 " "exported_name")
+
+        elif self.binding_kind == "reexport":
+
+            if not self.exported_name:
+                raise ValueError("reexport 必须提供 " "exported_name")
+
+            if not self.imported_name:
+                raise ValueError("reexport 必须提供 " "imported_name")
+
+            if not self.module_specifier:
+                raise ValueError("reexport 必须提供 " "module_specifier")
+
+        elif self.binding_kind == "star_reexport":
+
+            if not self.module_specifier:
+                raise ValueError("star_reexport 必须提供 " "module_specifier")
+
+        return self
+
+
+class ModuleExportExtractionResult(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    adapter_id: str
+
+    relative_path: str
+
+    exports: list[ModuleExportBinding] = Field(
+        default_factory=list,
+    )
+
+    issues: list[CodeIntelligenceIssue] = Field(
+        default_factory=list,
+    )
+
+
+ReferenceKind = Literal[
+    "call",
+    "read",
+    "type_reference",
+]
+
+
+ReferenceTargetForm = Literal[
+    "identifier",
+    "member",
+    "unknown",
+]
+
+
+class SymbolReferenceOccurrence(BaseModel):
+    """
+    Source Code 中出现的一次 Symbol Reference。
+
+    本阶段只真正解析：
+
+        reference_kind = call
+        target_form = identifier
+
+    但 Contract 提前允许：
+        read
+        type_reference
+
+    下一阶段直接复用。
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    source_path: str = Field(
+        min_length=1,
+    )
+
+    reference_kind: ReferenceKind
+
+    target_form: ReferenceTargetForm
+
+    # 对：
+    #
+    # listOrders()
+    #
+    # name = listOrders
+    #
+    # 对：
+    #
+    # api.listOrders()
+    #
+    # 4A 中 name 可以为空，
+    # expression_text 保存完整表达式。
+    name: str | None = None
+
+    expression_text: str = Field(
+        min_length=1,
+    )
+
+    line_number: int = Field(
+        ge=1,
+    )
+
+    column_number: int = Field(
+        ge=1,
+    )
+
+
+class SymbolReferenceExtractionResult(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    adapter_id: str
+
+    relative_path: str
+
+    references: list[SymbolReferenceOccurrence] = Field(
+        default_factory=list,
+    )
+
+    issues: list[CodeIntelligenceIssue] = Field(
+        default_factory=list,
+    )
+
+
+SymbolReferenceResolutionStatus = Literal[
+    "resolved",
+    "external",
+    "unresolved",
+    "ambiguous",
+    "unsupported",
+]
+
+
+class ResolvedSymbolReference(BaseModel):
+    """
+    一次 Reference 解析后的结果。
+
+    source_symbol_id:
+        谁在引用 / 调用
+
+    target_symbol_ids:
+        引用了谁
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    source_path: str
+
+    reference_kind: ReferenceKind
+
+    expression_text: str
+
+    line_number: int = Field(
+        ge=1,
+    )
+
+    source_symbol_id: str | None = None
+
+    status: SymbolReferenceResolutionStatus
+
+    target_symbol_ids: list[str] = Field(
+        default_factory=list,
+    )
+
+    reason: str | None = None
+
+
+SymbolEdgeRelation = Literal[
+    "calls",
+    "references",
+]
+
+
+class SymbolGraphEdge(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    source_symbol_id: str = Field(
+        min_length=1,
+    )
+
+    target_symbol_id: str = Field(
+        min_length=1,
+    )
+
+    relation: SymbolEdgeRelation
+
+    source_path: str
+
+    line_number: int = Field(
+        ge=1,
+    )

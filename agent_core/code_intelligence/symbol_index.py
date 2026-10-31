@@ -120,3 +120,144 @@ class SymbolIndex:
     ) -> int:
 
         return len(self._by_id)
+
+    def find_exported_by_file_and_name(
+        self,
+        *,
+        relative_path: str,
+        name: str,
+    ) -> list[CodeSymbol]:
+        """
+        查询某 Module 真正导出的 Symbol。
+
+        注意：
+
+        exported 的语义已经在
+        TypeScript Adapter 中限制在
+        Module Export Boundary。
+        """
+
+        return [
+            symbol
+            for symbol in self.find_by_file(relative_path)
+            if (symbol.name == name and symbol.exported)
+        ]
+
+    def file_paths(
+        self,
+    ) -> set[str]:
+
+        return set(self._by_file.keys())
+
+    def find_by_file_and_name(
+        self,
+        *,
+        relative_path: str,
+        name: str,
+    ) -> list[CodeSymbol]:
+        """
+        查找 Module 内真实定义的 Symbol。
+
+        注意：
+
+        不要求 symbol.exported == True。
+
+        因为：
+
+            function foo() {}
+
+            export { foo }
+
+        foo 本身定义时并不是
+        export declaration，
+        但 Module Export Table
+        会把它暴露出去。
+        """
+
+        return [
+            symbol for symbol in self.find_by_file(relative_path) if symbol.name == name
+        ]
+
+    def find_containing(
+        self,
+        *,
+        relative_path: str,
+        line_number: int,
+    ) -> list[CodeSymbol]:
+        """
+        查找包含该源码行的所有 Symbol。
+
+        从最内层 Symbol 到最外层 Symbol 排序。
+        """
+
+        result = [
+            symbol
+            for symbol in self.find_by_file(relative_path)
+            if (symbol.start_line <= line_number <= symbol.end_line)
+        ]
+
+        result.sort(
+            key=lambda symbol: (
+                (symbol.end_line - symbol.start_line),
+                -symbol.start_line,
+            )
+        )
+
+        return result
+
+    def find_innermost_containing(
+        self,
+        *,
+        relative_path: str,
+        line_number: int,
+    ) -> CodeSymbol | None:
+
+        candidates = self.find_containing(
+            relative_path=(relative_path),
+            line_number=(line_number),
+        )
+
+        if not candidates:
+            return None
+
+        return candidates[0]
+
+    def parent_chain(
+        self,
+        symbol_id: str,
+    ) -> list[CodeSymbol]:
+        """
+        返回：
+
+            current parent
+            grand parent
+            ...
+
+        不包含当前 Symbol 自己。
+        """
+
+        result: list[CodeSymbol] = []
+
+        current = self.get_symbol(symbol_id)
+
+        visited: set[str] = set()
+
+        while current is not None and (current.parent_symbol_id is not None):
+
+            parent_id = current.parent_symbol_id
+
+            if parent_id in visited:
+                break
+
+            visited.add(parent_id)
+
+            parent = self.get_symbol(parent_id)
+
+            if parent is None:
+                break
+
+            result.append(parent)
+
+            current = parent
+
+        return result

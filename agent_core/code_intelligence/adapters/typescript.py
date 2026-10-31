@@ -144,11 +144,19 @@ class TypeScriptSymbolExtractorAdapter:
     # ==================================
     # Parser Selection
     # ==================================
-
-    def _create_parser(
-        self,
+    def create_typescript_parser(
         document: SourceDocument,
     ) -> Parser:
+        """
+        TypeScript Adapter Layer 内部共享的
+        AST Parser Factory。
+
+        Symbol Extraction /
+        Import Extraction /
+        后续 Reference Extraction
+
+        都复用这一入口。
+        """
 
         suffix = PurePosixPath(document.relative_path).suffix.lower()
 
@@ -156,6 +164,13 @@ class TypeScriptSymbolExtractorAdapter:
             return Parser(_TSX_LANGUAGE)
 
         return Parser(_TYPESCRIPT_LANGUAGE)
+
+    def _create_parser(
+        self,
+        document: SourceDocument,
+    ) -> Parser:
+
+        return create_typescript_parser(document)
 
     # ==================================
     # AST Traversal
@@ -224,15 +239,16 @@ class TypeScriptSymbolExtractorAdapter:
 
             current_qualified_name = qualified_name
 
-        for child in node.named_children:
+        child_exported = current_exported if descriptor is None else False
 
+        for child in node.named_children:
             self._walk(
                 node=child,
                 source=source,
-                relative_path=(relative_path),
+                relative_path=relative_path,
                 symbols=symbols,
-                allocated_ids=(allocated_ids),
-                exported=(current_exported),
+                allocated_ids=allocated_ids,
+                exported=child_exported,
                 parent_symbol_id=(current_parent_symbol_id),
                 parent_qualified_name=(current_qualified_name),
             )
