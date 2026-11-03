@@ -95,7 +95,17 @@ class SymbolGraphExpander:
         symbol_index: SymbolIndex,
         symbol_graph: SymbolGraph,
         max_neighbors: int = 20,
+        seed_symbol_ids: set[str] | None = None,
     ) -> list[SymbolCandidate]:
+        if seed_symbol_ids is None:
+            # Backward Compatibility
+            #
+            # 旧测试 / 旧调用仍保持原行为。
+            seed_symbol_ids = {
+                candidate.symbol_id
+                for candidate in candidates
+                if candidate.source == "name"
+            }
         if max_neighbors < 0:
             raise ValueError("max_neighbors 不能小于 0")
         seeds = {}
@@ -105,7 +115,7 @@ class SymbolGraphExpander:
         neighbors = {}
         for seed in seeds.values():
             # 扩展结果不能再次成为种子，确保循环和高连接度不会递归放大。
-            if seed.source != "name":
+            if seed.symbol_id not in seed_symbol_ids:
                 continue
             for direction, edges in (
                 ("outgoing", symbol_graph.outgoing(seed.symbol_id)),

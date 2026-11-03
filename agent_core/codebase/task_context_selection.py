@@ -124,6 +124,7 @@ class TaskContextSelectionService:
         symbol_ranker: SymbolRanker | None = None,
         symbol_expander: SymbolGraphExpander | None = None,
         symbol_fusion: SymbolResultFusion | None = None,
+        symbol_evidence_mapper: RetrievalEvidenceSymbolMapper | None = None,
     ) -> None:
 
         # 语义搜索需要：
@@ -164,6 +165,9 @@ class TaskContextSelectionService:
                 SymbolGraphExpander,
                 SymbolResultFusion,
             )
+            from agent_core.codebase.symbol_discovery import (
+                RetrievalEvidenceSymbolMapper,
+            )
 
             self.symbol_snapshot_builder = (
                 symbol_snapshot_builder or RepositorySymbolSnapshotBuilder()
@@ -171,6 +175,9 @@ class TaskContextSelectionService:
             self.symbol_ranker = symbol_ranker or SymbolRanker()
             self.symbol_expander = symbol_expander or SymbolGraphExpander()
             self.symbol_fusion = symbol_fusion or SymbolResultFusion()
+            self.symbol_evidence_mapper = (
+                symbol_evidence_mapper or RetrievalEvidenceSymbolMapper()
+            )
 
         # 当前语义索引对应哪个 Commit。
         #
@@ -294,14 +301,53 @@ class TaskContextSelectionService:
                 if snapshot.repository_revision != revision:
                     raise ValueError("符号快照版本与当前代码版本不一致")
                 symbol_issues = list(snapshot.issues)
-                ranked = self.symbol_ranker.rank(
+                name_ranked = self.symbol_ranker.rank(
                     queries=[query.text for query in query_specs],
-                    symbol_index=snapshot.symbol_index,
+                    symbol_index=(snapshot.symbol_index),
                 )
+
+                # ==================================
+                # Evidence-driven Symbol Discovery
+                #
+                # 注意：
+                #
+                # 使用 retrieval_selection，
+                # 而不是 File Graph Expansion
+                # 之后的 selection。
+                #
+                # 原因：
+                #
+                # Dependency Graph 补进来的文件只是
+                # Structural Context，
+                # 不能自动升级为 Symbol Retrieval Evidence。
+                # ==================================
+
+                evidence_ranked = self.symbol_evidence_mapper.discover(
+                    selection=(retrieval_selection),
+                    symbol_index=(snapshot.symbol_index),
+                )
+
+                ranked = [
+                    *name_ranked,
+                    *evidence_ranked,
+                ]
+
+                seed_result = self.symbol_seed_gate.decide(
+                    candidates=ranked,
+                    selection=(retrieval_selection),
+                )
+
                 symbol_candidates = self.symbol_expander.expand(
                     candidates=ranked,
-                    symbol_index=snapshot.symbol_index,
-                    symbol_graph=snapshot.symbol_graph,
+                    symbol_index=(snapshot.symbol_index),
+                    symbol_graph=(snapshot.symbol_graph),
+                    seed_symbol_ids=set(seed_result.seed_symbol_ids),
+                )
+
+                symbol_candidates = self.symbol_expander.expand(
+                    candidates=ranked,
+                    symbol_index=(snapshot.symbol_index),
+                    symbol_graph=(snapshot.symbol_graph),
                 )
                 selection = self.symbol_fusion.fuse(
                     selection=selection.model_copy(deep=True),

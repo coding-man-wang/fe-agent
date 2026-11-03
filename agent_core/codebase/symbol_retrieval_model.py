@@ -17,7 +17,11 @@ class SymbolCandidate(BaseModel):
     score: float = Field(ge=0, le=1, allow_inf_nan=False)
     matched_queries: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
-    source: Literal["name", "graph"] = "name"
+    source: Literal[
+        "name",
+        "evidence",
+        "graph",
+    ] = "name"
     seed_symbol_id: str | None = None
     relation: Literal["calls", "references"] | None = None
     direction: Literal["outgoing", "incoming"] | None = None
