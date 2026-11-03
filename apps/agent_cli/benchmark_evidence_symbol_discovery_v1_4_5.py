@@ -35,7 +35,12 @@ from agent_core.codebase.symbol_discovery import (
     RetrievalEvidenceSymbolMapper,
 )
 from agent_core.codebase.symbol_retrieval import (
+    SymbolGraphExpander,
     SymbolRanker,
+)
+
+from agent_core.codebase.symbol_seed import (
+    SymbolSeedEligibilityGate,
 )
 from agent_core.codebase.task_retrieval import (
     TaskRetrievalService,
@@ -47,11 +52,21 @@ from agent_core.sdd.model import (
     RequirementSpec,
     TaskDefinition,
 )
+from agent_core.benchmark.symbol_retrieval_evaluator import (
+    SymbolGraphProvenanceCollector,
+    SymbolRetrievalBenchmarkCase,
+    SymbolRetrievalBenchmarkEvaluator,
+)
 
 LIST_ORDERS_ID = "src/api/orders.ts" "::function" "::listOrders"
 
 
 RAW_REQUIREMENT = "给订单列表增加状态筛选，" "不要修改用户列表"
+
+FORBIDDEN_USER_IDS = {
+    ("src/api/users.ts" "::function::listUsers"),
+    ("src/mocks/service.ts" "::function::mockListUsers"),
+}
 
 
 def resolve_repository_root() -> Path:
@@ -241,6 +256,86 @@ async def main() -> None:
         symbol_index=(snapshot.symbol_index),
     )
 
+    all_candidates = [
+        *name_candidates,
+        *evidence_candidates,
+    ]
+
+    seed_result = SymbolSeedEligibilityGate().decide(
+        candidates=(all_candidates),
+        selection=selection,
+        symbol_index=(snapshot.symbol_index),
+    )
+
+    expanded_candidates = SymbolGraphExpander().expand(
+        candidates=(all_candidates),
+        symbol_index=(snapshot.symbol_index),
+        symbol_graph=(snapshot.symbol_graph),
+        seed_symbol_ids=set(seed_result.seed_symbol_ids),
+    )
+
+    benchmark_case = SymbolRetrievalBenchmarkCase(
+        case_id=("REAL-ORDER-" "NATURAL-LANGUAGE"),
+        queries=[query.text for query in query_specs],
+        required_symbol_ids=[
+            ("src/api/orders.ts" "::function::listOrders"),
+            ("src/views/OrdersView.vue" "::component::OrdersView"),
+            ("src/mocks/service.ts" "::function::mockListOrders"),
+            ("src/api/requestClient.ts" "::function::request"),
+        ],
+        supporting_symbol_ids=[
+            ("src/api/orders.ts" "::variable::useMock"),
+            ("src/types/domain.ts" "::interface::Order"),
+            ("src/views/OrdersView.vue" "::variable::script_setup.orders"),
+        ],
+        forbidden_symbol_ids=[
+            ("src/api/users.ts" "::function::listUsers"),
+            ("src/views/UsersView.vue" "::component::UsersView"),
+            ("src/components/UserFilters.vue" "::component::UserFilters"),
+            ("src/components/UserFilters.vue" "::variable::script_setup.emit"),
+            ("src/mocks/service.ts" "::function::mockListUsers"),
+            ("src/mocks/service.ts" "::variable::mockListUsers.keyword"),
+            ("src/mocks/service.ts" "::variable::mockListUsers.result"),
+            ("src/mocks/service.ts" "::variable::mockListUsers.start"),
+            ("src/mocks/service.ts" "::function::mockGetUser"),
+            ("src/mocks/service.ts" "::variable::mockGetUser.user"),
+            ("src/types/domain.ts" "::interface::User"),
+            ("src/types/domain.ts" "::interface::UserQuery"),
+            ("src/types/domain.ts" "::type::UserStatus"),
+        ],
+    )
+
+    graph_provenance = SymbolGraphProvenanceCollector().collect(
+        seed_symbol_ids=set(seed_result.seed_symbol_ids),
+        symbol_index=(snapshot.symbol_index),
+        symbol_graph=(snapshot.symbol_graph),
+    )
+
+    evaluation = SymbolRetrievalBenchmarkEvaluator().evaluate(
+        case=benchmark_case,
+        # Graph 前 Candidate Pool
+        direct_candidates=[
+            *name_candidates,
+            *evidence_candidates,
+        ],
+        expanded_candidates=(expanded_candidates),
+        graph_provenance=(graph_provenance),
+        symbol_count=len(snapshot.symbol_index),
+        graph_edge_count=len(snapshot.symbol_graph),
+    )
+
+    candidate_ids = {candidate.symbol_id for candidate in all_candidates}
+
+    seed_ids = set(seed_result.seed_symbol_ids)
+
+    graph_added_ids = {
+        candidate.symbol_id
+        for candidate in expanded_candidates
+        if candidate.source == "graph"
+    }
+
+    expanded_ids = {candidate.symbol_id for candidate in expanded_candidates}
+
     name_ids = [candidate.symbol_id for candidate in name_candidates]
 
     evidence_ids = [candidate.symbol_id for candidate in evidence_candidates]
@@ -283,6 +378,14 @@ async def main() -> None:
         "discovery_gap_closed": (
             LIST_ORDERS_ID not in name_ids and LIST_ORDERS_ID in evidence_ids
         ),
+        "seed_symbol_ids": (sorted(seed_ids)),
+        "seed_decisions": [decision.model_dump() for decision in seed_result.decisions],
+        "graph_added_symbol_ids": (sorted(graph_added_ids)),
+        "expanded_symbol_ids": (sorted(expanded_ids)),
+        "forbidden_candidate_hits": (sorted(candidate_ids & FORBIDDEN_USER_IDS)),
+        "forbidden_seed_hits": (sorted(seed_ids & FORBIDDEN_USER_IDS)),
+        "forbidden_graph_hits": (sorted(graph_added_ids & FORBIDDEN_USER_IDS)),
+        "tiered_evaluation": (evaluation.model_dump()),
     }
 
     print()

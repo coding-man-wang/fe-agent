@@ -37,10 +37,16 @@ if TYPE_CHECKING:
     from agent_core.code_intelligence.repository_snapshot import (
         RepositorySymbolSnapshotBuilder,
     )
+    from agent_core.codebase.symbol_discovery import (
+        RetrievalEvidenceSymbolMapper,
+    )
     from agent_core.codebase.symbol_retrieval import (
-        SymbolRanker,
         SymbolGraphExpander,
+        SymbolRanker,
         SymbolResultFusion,
+    )
+    from agent_core.codebase.symbol_seed import (
+        SymbolSeedEligibilityGate,
     )
 
 ContextRetrievalMode = Literal[
@@ -85,8 +91,13 @@ class TaskContextSelectionResult:
     semantic_error: str | None
 
     symbol_candidates: list[SymbolCandidate] = field(default_factory=list)
+
+    symbol_seed_ids: list[str] = field(default_factory=list)
+
     symbol_issues: list[str] = field(default_factory=list)
+
     symbol_error: str | None = None
+
     symbol_added_files: list[str] = field(default_factory=list)
 
 
@@ -125,6 +136,7 @@ class TaskContextSelectionService:
         symbol_expander: SymbolGraphExpander | None = None,
         symbol_fusion: SymbolResultFusion | None = None,
         symbol_evidence_mapper: RetrievalEvidenceSymbolMapper | None = None,
+        symbol_seed_gate: SymbolSeedEligibilityGate | None = None,
     ) -> None:
 
         # 语义搜索需要：
@@ -168,6 +180,9 @@ class TaskContextSelectionService:
             from agent_core.codebase.symbol_discovery import (
                 RetrievalEvidenceSymbolMapper,
             )
+            from agent_core.codebase.symbol_seed import (
+                SymbolSeedEligibilityGate,
+            )
 
             self.symbol_snapshot_builder = (
                 symbol_snapshot_builder or RepositorySymbolSnapshotBuilder()
@@ -178,6 +193,7 @@ class TaskContextSelectionService:
             self.symbol_evidence_mapper = (
                 symbol_evidence_mapper or RetrievalEvidenceSymbolMapper()
             )
+            self.symbol_seed_gate = symbol_seed_gate or SymbolSeedEligibilityGate()
 
         # 当前语义索引对应哪个 Commit。
         #
@@ -286,6 +302,7 @@ class TaskContextSelectionService:
         # 原文件链路先完整执行，符号证据不得改变其候选、重排或图扩展。
         # 这也避免在上游融合后再次 top-k 截断而丢失原有文件。
         symbol_candidates = []
+        symbol_seed_ids = []
         symbol_issues = []
         symbol_error = None
         symbol_added_files = []
@@ -309,17 +326,12 @@ class TaskContextSelectionService:
                 # ==================================
                 # Evidence-driven Symbol Discovery
                 #
-                # 注意：
-                #
-                # 使用 retrieval_selection，
+                # 必须使用 retrieval_selection，
                 # 而不是 File Graph Expansion
                 # 之后的 selection。
                 #
-                # 原因：
-                #
-                # Dependency Graph 补进来的文件只是
-                # Structural Context，
-                # 不能自动升级为 Symbol Retrieval Evidence。
+                # Dependency Graph Context
+                # 不自动升级为 Direct Retrieval Evidence。
                 # ==================================
 
                 evidence_ranked = self.symbol_evidence_mapper.discover(
@@ -327,28 +339,55 @@ class TaskContextSelectionService:
                     symbol_index=(snapshot.symbol_index),
                 )
 
+                # ==================================
+                # Candidate Fusion
+                #
+                # 注意：
+                #
+                # 此时只是把两类 Evidence
+                # 放到一个 Candidate Pool。
+                #
+                # Candidate != Seed
+                # ==================================
+
                 ranked = [
                     *name_ranked,
                     *evidence_ranked,
                 ]
 
+                # ==================================
+                # Seed Eligibility Gate
+                #
+                # 决定：
+                #
+                # 哪些 Candidate 可以启动
+                # SymbolGraph Expansion。
+                # ==================================
+
                 seed_result = self.symbol_seed_gate.decide(
                     candidates=ranked,
                     selection=(retrieval_selection),
+                    symbol_index=(snapshot.symbol_index),
                 )
+
+                symbol_seed_ids = list(seed_result.seed_symbol_ids)
+
+                # ==================================
+                # Symbol Graph Expansion
+                #
+                # 这里只执行 Gate 已经批准的 Seed。
+                #
+                # 不再根据 candidate.source
+                # 自己猜 Expansion Permission。
+                # ==================================
 
                 symbol_candidates = self.symbol_expander.expand(
                     candidates=ranked,
                     symbol_index=(snapshot.symbol_index),
                     symbol_graph=(snapshot.symbol_graph),
-                    seed_symbol_ids=set(seed_result.seed_symbol_ids),
+                    seed_symbol_ids=set(symbol_seed_ids),
                 )
 
-                symbol_candidates = self.symbol_expander.expand(
-                    candidates=ranked,
-                    symbol_index=(snapshot.symbol_index),
-                    symbol_graph=(snapshot.symbol_graph),
-                )
                 selection = self.symbol_fusion.fuse(
                     selection=selection.model_copy(deep=True),
                     index=index,
@@ -377,6 +416,7 @@ class TaskContextSelectionService:
             symbol_issues=symbol_issues,
             symbol_error=symbol_error,
             symbol_added_files=symbol_added_files,
+            symbol_seed_ids=(symbol_seed_ids),
         )
 
     async def _ensure_semantic_index(
