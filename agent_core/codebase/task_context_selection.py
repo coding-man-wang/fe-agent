@@ -48,6 +48,9 @@ if TYPE_CHECKING:
     from agent_core.codebase.symbol_seed import (
         SymbolSeedEligibilityGate,
     )
+    from agent_core.codebase.symbol_candidate_admission import (
+        SymbolCandidateAdmissionGate,
+    )
 
 ContextRetrievalMode = Literal[
     "hybrid",
@@ -100,6 +103,10 @@ class TaskContextSelectionResult:
 
     symbol_added_files: list[str] = field(default_factory=list)
 
+    symbol_admitted_ids: list[str] = field(default_factory=list)
+
+    symbol_rejected_ids: list[str] = field(default_factory=list)
+
 
 class TaskContextSelectionService:
     """
@@ -137,6 +144,7 @@ class TaskContextSelectionService:
         symbol_fusion: SymbolResultFusion | None = None,
         symbol_evidence_mapper: RetrievalEvidenceSymbolMapper | None = None,
         symbol_seed_gate: SymbolSeedEligibilityGate | None = None,
+        symbol_candidate_admission_gate: SymbolCandidateAdmissionGate | None = None,
     ) -> None:
 
         # 语义搜索需要：
@@ -183,6 +191,9 @@ class TaskContextSelectionService:
             from agent_core.codebase.symbol_seed import (
                 SymbolSeedEligibilityGate,
             )
+            from agent_core.codebase.symbol_candidate_admission import (
+                SymbolCandidateAdmissionGate,
+            )
 
             self.symbol_snapshot_builder = (
                 symbol_snapshot_builder or RepositorySymbolSnapshotBuilder()
@@ -194,7 +205,9 @@ class TaskContextSelectionService:
                 symbol_evidence_mapper or RetrievalEvidenceSymbolMapper()
             )
             self.symbol_seed_gate = symbol_seed_gate or SymbolSeedEligibilityGate()
-
+            self.symbol_candidate_admission_gate = (
+                symbol_candidate_admission_gate or SymbolCandidateAdmissionGate()
+            )
         # 当前语义索引对应哪个 Commit。
         #
         # 如果 Commit 没变，不需要重新调用
@@ -306,6 +319,8 @@ class TaskContextSelectionService:
         symbol_issues = []
         symbol_error = None
         symbol_added_files = []
+        symbol_admitted_ids = []
+        symbol_rejected_ids = []
         if self.enable_symbol_retrieval:
             try:
                 baseline_paths = {
@@ -350,22 +365,66 @@ class TaskContextSelectionService:
                 # Candidate != Seed
                 # ==================================
 
-                ranked = [
+                generated_candidates = [
                     *name_ranked,
                     *evidence_ranked,
                 ]
 
                 # ==================================
-                # Seed Eligibility Gate
+                # 1. Bootstrap Anchor Discovery
                 #
-                # 决定：
+                # 这里不是最终 Seed Result。
                 #
-                # 哪些 Candidate 可以启动
-                # SymbolGraph Expansion。
+                # 目的只是寻找足够可信的 Anchor，
+                # 给 Candidate Admission 做
+                # deterministic corroboration。
+                # ==================================
+
+                bootstrap_seed_result = self.symbol_seed_gate.decide(
+                    candidates=(generated_candidates),
+                    selection=(retrieval_selection),
+                    symbol_index=(snapshot.symbol_index),
+                )
+
+                # ==================================
+                # 2. Candidate Admission
+                #
+                # 只保留：
+                #
+                # - Anchor
+                # - 被 Anchor 一跳 Graph
+                #   Evidence 支持的已有 Candidate
+                #
+                # 不在这里创建 Graph-only Symbol。
+                # ==================================
+
+                admission_result = self.symbol_candidate_admission_gate.admit(
+                    candidates=(generated_candidates),
+                    anchor_symbol_ids=set(bootstrap_seed_result.seed_symbol_ids),
+                    symbol_index=(snapshot.symbol_index),
+                    symbol_graph=(snapshot.symbol_graph),
+                )
+
+                admitted_candidates = list(admission_result.admitted_candidates)
+
+                symbol_admitted_ids = [
+                    candidate.symbol_id for candidate in admitted_candidates
+                ]
+
+                symbol_rejected_ids = list(admission_result.rejected_symbol_ids)
+
+                # ==================================
+                # 3. Final Seed Eligibility
+                #
+                # Admission 后重新运行一次。
+                #
+                # 最终 Graph Expansion Permission
+                # 必须针对真正进入 Retrieval
+                # Pipeline 的 Candidate 重新确认。
                 # ==================================
 
                 seed_result = self.symbol_seed_gate.decide(
-                    candidates=ranked,
+                    candidates=(admitted_candidates),
                     selection=(retrieval_selection),
                     symbol_index=(snapshot.symbol_index),
                 )
@@ -373,16 +432,14 @@ class TaskContextSelectionService:
                 symbol_seed_ids = list(seed_result.seed_symbol_ids)
 
                 # ==================================
-                # Symbol Graph Expansion
+                # 4. Graph Expansion
                 #
-                # 这里只执行 Gate 已经批准的 Seed。
-                #
-                # 不再根据 candidate.source
-                # 自己猜 Expansion Permission。
+                # Expansion 可以新增 Candidate，
+                # 例如 request。
                 # ==================================
 
                 symbol_candidates = self.symbol_expander.expand(
-                    candidates=ranked,
+                    candidates=(admitted_candidates),
                     symbol_index=(snapshot.symbol_index),
                     symbol_graph=(snapshot.symbol_graph),
                     seed_symbol_ids=set(symbol_seed_ids),
@@ -417,6 +474,8 @@ class TaskContextSelectionService:
             symbol_error=symbol_error,
             symbol_added_files=symbol_added_files,
             symbol_seed_ids=(symbol_seed_ids),
+            symbol_admitted_ids=(symbol_admitted_ids),
+            symbol_rejected_ids=(symbol_rejected_ids),
         )
 
     async def _ensure_semantic_index(

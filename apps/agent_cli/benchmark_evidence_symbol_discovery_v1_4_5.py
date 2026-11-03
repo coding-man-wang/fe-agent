@@ -57,6 +57,9 @@ from agent_core.benchmark.symbol_retrieval_evaluator import (
     SymbolRetrievalBenchmarkCase,
     SymbolRetrievalBenchmarkEvaluator,
 )
+from agent_core.codebase.symbol_candidate_admission import (
+    SymbolCandidateAdmissionGate,
+)
 
 LIST_ORDERS_ID = "src/api/orders.ts" "::function" "::listOrders"
 
@@ -256,19 +259,34 @@ async def main() -> None:
         symbol_index=(snapshot.symbol_index),
     )
 
-    all_candidates = [
+    generated_candidates = [
         *name_candidates,
         *evidence_candidates,
     ]
 
+    bootstrap_seed_result = SymbolSeedEligibilityGate().decide(
+        candidates=(generated_candidates),
+        selection=selection,
+        symbol_index=(snapshot.symbol_index),
+    )
+
+    admission_result = SymbolCandidateAdmissionGate().admit(
+        candidates=(generated_candidates),
+        anchor_symbol_ids=set(bootstrap_seed_result.seed_symbol_ids),
+        symbol_index=(snapshot.symbol_index),
+        symbol_graph=(snapshot.symbol_graph),
+    )
+
+    admitted_candidates = admission_result.admitted_candidates
+
     seed_result = SymbolSeedEligibilityGate().decide(
-        candidates=(all_candidates),
+        candidates=(admitted_candidates),
         selection=selection,
         symbol_index=(snapshot.symbol_index),
     )
 
     expanded_candidates = SymbolGraphExpander().expand(
-        candidates=(all_candidates),
+        candidates=(admitted_candidates),
         symbol_index=(snapshot.symbol_index),
         symbol_graph=(snapshot.symbol_graph),
         seed_symbol_ids=set(seed_result.seed_symbol_ids),
@@ -313,18 +331,18 @@ async def main() -> None:
 
     evaluation = SymbolRetrievalBenchmarkEvaluator().evaluate(
         case=benchmark_case,
-        # Graph 前 Candidate Pool
-        direct_candidates=[
-            *name_candidates,
-            *evidence_candidates,
-        ],
+        direct_candidates=(admitted_candidates),
         expanded_candidates=(expanded_candidates),
         graph_provenance=(graph_provenance),
         symbol_count=len(snapshot.symbol_index),
         graph_edge_count=len(snapshot.symbol_graph),
     )
 
-    candidate_ids = {candidate.symbol_id for candidate in all_candidates}
+    generated_ids = {candidate.symbol_id for candidate in generated_candidates}
+
+    admitted_ids = {candidate.symbol_id for candidate in admitted_candidates}
+
+    rejected_ids = set(admission_result.rejected_symbol_ids)
 
     seed_ids = set(seed_result.seed_symbol_ids)
 
@@ -342,6 +360,11 @@ async def main() -> None:
 
     retrieval_files = []
 
+    generated_ids = {candidate.symbol_id for candidate in generated_candidates}
+
+    admitted_ids = {candidate.symbol_id for candidate in admitted_candidates}
+
+    rejected_ids = set(admission_result.rejected_symbol_ids)
     for item in selection.selected_files:
 
         chunk = item.best_semantic_chunk
@@ -382,10 +405,31 @@ async def main() -> None:
         "seed_decisions": [decision.model_dump() for decision in seed_result.decisions],
         "graph_added_symbol_ids": (sorted(graph_added_ids)),
         "expanded_symbol_ids": (sorted(expanded_ids)),
-        "forbidden_candidate_hits": (sorted(candidate_ids & FORBIDDEN_USER_IDS)),
-        "forbidden_seed_hits": (sorted(seed_ids & FORBIDDEN_USER_IDS)),
-        "forbidden_graph_hits": (sorted(graph_added_ids & FORBIDDEN_USER_IDS)),
+        "generated_candidate_ids": (sorted(generated_ids)),
+        "admitted_candidate_ids": (sorted(admitted_ids)),
+        "rejected_candidate_ids": (sorted(rejected_ids)),
+        "admission_decisions": [
+            decision.model_dump() for decision in admission_result.decisions
+        ],
+        "forbidden_generated_candidate_hits": (
+            sorted(generated_ids & set(benchmark_case.forbidden_symbol_ids))
+        ),
+        "forbidden_admitted_candidate_hits": (
+            sorted(admitted_ids & set(benchmark_case.forbidden_symbol_ids))
+        ),
+        "forbidden_seed_hits": (
+            sorted(seed_ids & set(benchmark_case.forbidden_symbol_ids))
+        ),
+        "forbidden_graph_hits": (
+            sorted(graph_added_ids & set(benchmark_case.forbidden_symbol_ids))
+        ),
         "tiered_evaluation": (evaluation.model_dump()),
+        "generated_candidate_ids": (sorted(generated_ids)),
+        "admitted_candidate_ids": (sorted(admitted_ids)),
+        "rejected_candidate_ids": (sorted(rejected_ids)),
+        "admission_decisions": [
+            decision.model_dump() for decision in admission_result.decisions
+        ],
     }
 
     print()
