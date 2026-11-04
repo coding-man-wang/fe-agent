@@ -32,7 +32,7 @@ from agent_core.coding.verification_workflow import (
     VerificationWorkflow,
     VerificationWorkflowError,
 )
-from agent_core.tests.test_recovery import (
+from tests.test_recovery import (
     AFTER_A,
     AFTER_B,
     BEFORE_B,

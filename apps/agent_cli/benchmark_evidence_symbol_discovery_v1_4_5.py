@@ -338,12 +338,6 @@ async def main() -> None:
         graph_edge_count=len(snapshot.symbol_graph),
     )
 
-    generated_ids = {candidate.symbol_id for candidate in generated_candidates}
-
-    admitted_ids = {candidate.symbol_id for candidate in admitted_candidates}
-
-    rejected_ids = set(admission_result.rejected_symbol_ids)
-
     seed_ids = set(seed_result.seed_symbol_ids)
 
     graph_added_ids = {
@@ -405,12 +399,6 @@ async def main() -> None:
         "seed_decisions": [decision.model_dump() for decision in seed_result.decisions],
         "graph_added_symbol_ids": (sorted(graph_added_ids)),
         "expanded_symbol_ids": (sorted(expanded_ids)),
-        "generated_candidate_ids": (sorted(generated_ids)),
-        "admitted_candidate_ids": (sorted(admitted_ids)),
-        "rejected_candidate_ids": (sorted(rejected_ids)),
-        "admission_decisions": [
-            decision.model_dump() for decision in admission_result.decisions
-        ],
         "forbidden_generated_candidate_hits": (
             sorted(generated_ids & set(benchmark_case.forbidden_symbol_ids))
         ),
