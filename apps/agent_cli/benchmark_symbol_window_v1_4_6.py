@@ -90,6 +90,16 @@ from agent_core.code_intelligence.symbol_index import SymbolIndex
 from agent_core.benchmark.context_comparison_evaluator import (
     ContextComparisonEvaluator,
 )
+from agent_core.benchmark.context_noise_diagnostics import (
+    ContextNoiseDiagnosticBuilder,
+)
+from agent_core.codebase.graph_evidence_filter import (
+    GraphEvidenceFilter,
+)
+from agent_core.benchmark.context_file_quality import (
+    ContextFileOracle,
+    ContextFileQualityEvaluator,
+)
 
 RAW_REQUIREMENT = "给订单列表增加状态筛选，" "不要修改用户列表"
 
@@ -192,6 +202,7 @@ def build_retrieval_service(
 async def run_real_benchmark(
     *,
     include_ab: bool = False,
+    include_noise_shadow: bool = False,
 ):
 
     repository_root = resolve_repository_root()
@@ -258,6 +269,8 @@ async def run_real_benchmark(
         raw_requirement=(RAW_REQUIREMENT),
         requirement_spec=(requirement),
     )
+
+    selection_diagnostics = ContextNoiseDiagnosticBuilder().build(context_selection)
 
     independent_snapshot = RepositorySymbolSnapshotBuilder().build(
         file_index=context_selection.index,
@@ -342,6 +355,7 @@ async def run_real_benchmark(
             enhanced_bundle=bundle,
             irrelevant_paths=irrelevant_paths,
         )
+
     pipeline_symbol_ids = {
         candidate.symbol_id for candidate in context_selection.symbol_candidates
     }
@@ -358,6 +372,70 @@ async def run_real_benchmark(
             "没有任何进入 Final File Selection "
             "的 Symbol Candidate"
         )
+
+    noise_shadow = None
+    if include_noise_shadow:
+        proposal = GraphEvidenceFilter().propose(
+            selection=context_selection.selection,
+        )
+
+        filtered_bundle = ProjectContextBuilder().build(
+            repository_root=repository_root,
+            requirement=requirement,
+            technical_spec=technical_spec,
+            task=task,
+            repository=repository,
+            selection=proposal.selection,
+            engineering_rules=[],
+            max_files=8,
+            max_total_chars=40_000,
+            max_chars_per_file=10_000,
+        )
+
+        symbol_evaluation = SymbolWindowBenchmarkEvaluator().evaluate(
+            case=SymbolWindowBenchmarkCase(
+                case_id="REAL-ORDER-NOISE-SHADOW",
+                required_symbol_ids=sorted(selected_symbol_ids),
+                require_symbol_window=True,
+                require_independent_symbol_index=True,
+            ),
+            bundle=filtered_bundle,
+            repository_root=repository_root,
+            symbol_index=(independent_snapshot.symbol_index),
+        )
+
+        # Oracle 只在 Benchmark Evaluation 使用
+        oracle = ContextFileOracle(
+            required_files=[
+                "src/views/OrdersView.vue",
+                "src/api/orders.ts",
+                "src/mocks/service.ts",
+                "src/types/domain.ts",
+            ],
+            useful_files=[
+                "src/api/requestClient.ts",
+            ],
+            irrelevant_files=[
+                "src/components/UserFilters.vue",
+                "src/components/UserTable.vue",
+            ],
+        )
+
+        file_quality = ContextFileQualityEvaluator().evaluate(
+            bundle=filtered_bundle,
+            oracle=oracle,
+        )
+
+        noise_shadow = {
+            "proposed_drops": proposal.dropped_paths,
+            "drop_reasons": proposal.reasons,
+            "selected_files": [
+                item.relative_path for item in filtered_bundle.code_context
+            ],
+            "context_chars": (filtered_bundle.budget.used_chars),
+            "symbol_evaluation": (symbol_evaluation.model_dump(mode="json")),
+            "file_quality": (file_quality.model_dump(mode="json")),
+        }
 
     # ==================================
     # 注意：
@@ -425,10 +503,14 @@ async def run_real_benchmark(
         ],
         "budget": (bundle.budget.model_dump(mode="json")),
         "evaluation": (evaluation.model_dump(mode="json")),
+        "selection_diagnostics": (selection_diagnostics.model_dump(mode="json")),
     }
 
     if comparison is not None:
         result["context_ab"] = comparison.model_dump(mode="json")
+
+    if noise_shadow is not None:
+        result["noise_shadow"] = noise_shadow
 
     return result
 

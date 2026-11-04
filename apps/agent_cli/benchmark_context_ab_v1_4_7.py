@@ -47,6 +47,7 @@ async def main() -> None:
             ),
             "budget_preserved": (previous_evaluation["budget_preserved"]),
         },
+        "selection_diagnostics": real["selection_diagnostics"],
     }
 
     print("=" * 80)
