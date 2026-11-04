@@ -14,7 +14,7 @@ from agent_core.sdd.plan import (
 
 class FakePlanLLM:
 
-    async def think(
+    async def chat(
         self,
         request,
     ):

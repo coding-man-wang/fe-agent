@@ -263,7 +263,7 @@ async def test_rejects_noop_patch(
 
     with pytest.raises(
         PatchGenerationError,
-        match="没有产生实际修改",
+        match="Patch 生成结果与当前文件完全一致",
     ):
         await generator.generate(
             artifact=artifact,

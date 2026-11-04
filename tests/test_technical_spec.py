@@ -2,12 +2,14 @@ import pytest
 
 from agent_core.llm.base import LLM
 from agent_core.llm.model import ChatResponse
-from agent_core.sdd.model import (
-    ProjectContext,
-    TechnicalSpec,
-)
+
 from agent_core.sdd.technical import (
     TechnicalSpecGenerator,
+)
+from agent_core.sdd.model import (
+    RequirementSpec,
+    ProjectContext,
+    TechnicalSpec,
 )
 
 
@@ -117,13 +119,41 @@ class FakeTechnicalLLM(LLM):
 
 @pytest.mark.asyncio
 async def test_generate_technical_spec():
-    generator = TechnicalSpecGenerator(llm=FakeTechnicalLLM())
+    requirement = RequirementSpec(
+        title="用户列表功能",
+        summary="在 Vue3 管理后台增加用户列表页面",
+        goals=[
+            "展示用户列表",
+            "支持用户名搜索",
+            "支持分页",
+        ],
+        acceptance_criteria=[
+            "页面可以展示用户列表",
+            "搜索结果正确",
+            "分页切换正确",
+        ],
+    )
+
+    project_context = ProjectContext(
+        project_name="admin-web",
+        framework="Vue3",
+        language="TypeScript",
+        build_tool="Vite",
+        available_components=[
+            "Table",
+            "SearchForm",
+        ],
+    )
+
+    generator = TechnicalSpecGenerator(
+        llm=FakeTechnicalLLM(),
+    )
 
     technical_spec = await generator.generate(
         requirement=requirement,
         project_context=project_context,
     )
 
+    assert isinstance(technical_spec, TechnicalSpec)
     assert technical_spec.summary == "实现用户列表页面"
-
     assert len(technical_spec.technical_decisions) == 1

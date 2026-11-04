@@ -138,6 +138,7 @@ def test_expander_adds_graph_dependencies(
     expander = RepositoryGraphContextExpander(
         max_files=3,
         max_graph_files=2,
+        min_retrieval_files=1,
         dependency_depth=2,
         dependent_depth=1,
     )
@@ -210,6 +211,7 @@ def test_expander_adds_graph_dependents(
     expander = RepositoryGraphContextExpander(
         max_files=2,
         max_graph_files=1,
+        min_retrieval_files=1,
         dependency_depth=1,
         dependent_depth=1,
     )
@@ -285,6 +287,7 @@ def test_expander_deduplicates_existing_retrieval_files(
     expander = RepositoryGraphContextExpander(
         max_files=4,
         max_graph_files=2,
+        min_retrieval_files=2,
         dependency_depth=1,
         dependent_depth=1,
     )
@@ -370,6 +373,7 @@ def test_expander_respects_context_budget_and_keeps_target_evidence(
     expander = RepositoryGraphContextExpander(
         max_files=8,
         max_graph_files=3,
+        min_retrieval_files=4,
         dependency_depth=1,
         dependent_depth=1,
     )

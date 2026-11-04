@@ -109,18 +109,26 @@ class OpenAILLM(LLM):
 
             status_code = exc.status_code
 
-            retryable = (
-                status_code
-                in {
-                    408,
-                    409,
-                    429,
-                }
-                or status_code >= 500
-            )
+            body = exc.body
+
+            error_code = None
+
+            if isinstance(body, dict):
+
+                error_code = body.get("code")
+
+                nested_error = body.get("error")
+
+                if error_code is None and isinstance(nested_error, dict):
+                    error_code = nested_error.get("code")
+
+            retryable = status_code in {408, 409, 429} or status_code >= 500
+
+            if status_code == 429 and error_code == "insufficient_quota":
+                retryable = False
 
             raise LLMError(
-                ("LLM request failed " f"with status " f"{status_code}"),
+                f"LLM request failed with status {status_code}",
                 retryable=retryable,
                 status_code=status_code,
             ) from exc

@@ -117,14 +117,26 @@ async def test_resolver_separates_target_and_dependency():
     )
     inv = InvestigationArtifact(
         task_id="TASK-001",
-        summary="facts",
+        summary="上游代码调查结果",
         observed_files=[
+            ObservedRepositoryFile(
+                relative_path="src/views/UsersView.vue",
+                observed_role="candidate_target",
+                evidence=["页面需要接入 pageSize"],
+                confidence=0.95,
+            ),
+            ObservedRepositoryFile(
+                relative_path="src/stores/users.ts",
+                observed_role="candidate_target",
+                evidence=["Store 需要传递分页参数"],
+                confidence=0.95,
+            ),
             ObservedRepositoryFile(
                 relative_path="src/api/users.ts",
                 observed_role="dependency",
-                evidence=["协议已支持"],
+                evidence=["API 协议已支持，无需修改"],
                 confidence=0.9,
-            )
+            ),
         ],
     )
     surface = await ChangeSurfaceResolver(llm=llm).resolve(

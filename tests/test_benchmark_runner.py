@@ -18,11 +18,123 @@ from agent_core.benchmark.runner import (
 from agent_core.git.client import (
     GitCommandResult,
 )
+
 from agent_core.sdd.model import (
     RequirementSpec,
+    ProjectContext,
+    TechnicalSpec,
+    ImplementationPlan,
+    TaskPlan,
+)
+
+from agent_core.benchmark.retrieval_model import (
+    BenchmarkRetrievalCapture,
+)
+
+from agent_core.benchmark.evaluation_model import (
+    BenchmarkRetrievalEvaluation,
 )
 
 BASE_SHA = "a" * 40
+
+
+class FakeProjectContextProvider:
+    def build(self):
+        return ProjectContext(
+            project_name="benchmark-web",
+            framework="Vue3",
+            language="TypeScript",
+        )
+
+
+class FakeTechnicalSpecGenerator:
+    async def generate(
+        self,
+        requirement,
+        project_context,
+    ):
+        return TechnicalSpec(
+            summary="测试技术方案",
+        )
+
+
+class FakeImplementationPlanGenerator:
+    async def generate(
+        self,
+        requirement,
+        technical_spec,
+        project_context,
+    ):
+        return ImplementationPlan(
+            summary="测试实施计划",
+        )
+
+
+class FakeTaskPlanner:
+    async def generate(
+        self,
+        requirement,
+        technical_spec,
+        implementation_plan,
+        project_context,
+    ):
+        return TaskPlan(
+            summary="测试任务计划",
+            tasks=[],
+        )
+
+
+class FakeRetrievalCaptureService:
+    async def capture(
+        self,
+        *,
+        task_plan,
+        raw_requirement,
+        requirement_spec,
+        repository_revision,
+    ):
+        return BenchmarkRetrievalCapture(
+            indexed_files=0,
+            task_retrievals=[],
+        )
+
+
+class FakeRetrievalEvaluator:
+    def evaluate(
+        self,
+        *,
+        case,
+        capture,
+    ):
+        return BenchmarkRetrievalEvaluation(
+            status="partial",
+            recall=0.0,
+            precision=0.0,
+        )
+
+
+def create_test_runner(
+    *,
+    case_root,
+    repository,
+    analyzer,
+    store,
+):
+    return BenchmarkRunner(
+        case_loader=BenchmarkCaseLoader(case_root),
+        repository_guard=BenchmarkRepositoryGuard(
+            repository_root=repository,
+            git_client=FakeGitClient(),
+        ),
+        project_context_provider=(FakeProjectContextProvider()),
+        requirement_analyzer=analyzer,
+        technical_spec_generator=(FakeTechnicalSpecGenerator()),
+        implementation_plan_generator=(FakeImplementationPlanGenerator()),
+        task_planner=FakeTaskPlanner(),
+        retrieval_capture_service=(FakeRetrievalCaptureService()),
+        retrieval_evaluator=(FakeRetrievalEvaluator()),
+        run_store=store,
+    )
 
 
 def write_case(
@@ -46,7 +158,10 @@ def write_case(
         },
     }
 
-    (root / "CASE-001.json").write_text(
+    runnable_root = root / "runnable"
+    runnable_root.mkdir(parents=True, exist_ok=True)
+
+    (runnable_root / "CASE-001.json").write_text(
         json.dumps(
             data,
             ensure_ascii=False,
@@ -163,16 +278,11 @@ async def test_runner_executes_requirement_analysis(
 
     analyzer = FakeRequirementAnalyzer(create_requirement_spec())
 
-    runner = BenchmarkRunner(
-        case_loader=(BenchmarkCaseLoader(case_root)),
-        repository_guard=(
-            BenchmarkRepositoryGuard(
-                repository_root=(repository),
-                git_client=(FakeGitClient()),
-            )
-        ),
-        requirement_analyzer=(analyzer),
-        run_store=(BenchmarkRunStore(tmp_path)),
+    runner = create_test_runner(
+        case_root=case_root,
+        repository=repository,
+        analyzer=analyzer,
+        store=BenchmarkRunStore(tmp_path),
     )
 
     result = await runner.run(case_id="CASE-001")
@@ -211,16 +321,11 @@ async def test_runner_persists_completed_run(
 
     store = BenchmarkRunStore(tmp_path)
 
-    runner = BenchmarkRunner(
-        case_loader=(BenchmarkCaseLoader(case_root)),
-        repository_guard=(
-            BenchmarkRepositoryGuard(
-                repository_root=(repository),
-                git_client=(FakeGitClient()),
-            )
-        ),
-        requirement_analyzer=(FakeRequirementAnalyzer(create_requirement_spec())),
-        run_store=store,
+    runner = create_test_runner(
+        case_root=case_root,
+        repository=repository,
+        analyzer=FakeRequirementAnalyzer(create_requirement_spec()),
+        store=store,
     )
 
     result = await runner.run(case_id="CASE-001")
@@ -247,16 +352,11 @@ async def test_runner_persists_failure(
 
     store = BenchmarkRunStore(tmp_path)
 
-    runner = BenchmarkRunner(
-        case_loader=(BenchmarkCaseLoader(case_root)),
-        repository_guard=(
-            BenchmarkRepositoryGuard(
-                repository_root=(repository),
-                git_client=(FakeGitClient()),
-            )
-        ),
-        requirement_analyzer=(FailingRequirementAnalyzer()),
-        run_store=store,
+    runner = create_test_runner(
+        case_root=case_root,
+        repository=repository,
+        analyzer=FailingRequirementAnalyzer(),
+        store=store,
     )
 
     result = await runner.run(case_id="CASE-001")

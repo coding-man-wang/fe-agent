@@ -51,7 +51,13 @@ def make_candidates():
     ]
 
 
-def build_bundle(root, mode, *, with_symbols=True):
+def build_bundle(
+    root,
+    mode,
+    *,
+    with_symbols=True,
+    enable_symbol_windows=False,
+):
     content = (
         "export function loadOrders() {\n  return []\n}\n"
         "\nfunction normalize() {\n  return true\n}\n"
@@ -90,10 +96,17 @@ def build_bundle(root, mode, *, with_symbols=True):
         total_selected_bytes=selected_file.size_bytes,
         selected_files=[selected_file],
     )
-    bundle = ProjectContextBuilder().build(
+    bundle = ProjectContextBuilder(
+        enable_symbol_windows=enable_symbol_windows,
+    ).build(
         repository_root=root,
-        requirement=RequirementSpec(title="订单查询", summary="检查订单查询逻辑"),
-        technical_spec=TechnicalSpec(summary="沿现有查询函数阅读代码"),
+        requirement=RequirementSpec(
+            title="订单查询",
+            summary="检查订单查询逻辑",
+        ),
+        technical_spec=TechnicalSpec(
+            summary="沿现有查询函数阅读代码",
+        ),
         task=TaskDefinition(
             task_id="TASK-SYMBOL-CONTEXT",
             task_type="code_change",
@@ -101,11 +114,14 @@ def build_bundle(root, mode, *, with_symbols=True):
             objective="检查 loadOrders",
             source_step_order=1,
         ),
-        repository=RepositoryProfile(project_name="fixture", root_path=str(root)),
+        repository=RepositoryProfile(
+            project_name="fixture",
+            root_path=str(root),
+        ),
         selection=selection,
         max_files=1,
-        max_total_chars=1000 if mode == "full_file" else 40,
-        max_chars_per_file=1000 if mode == "full_file" else 40,
+        max_total_chars=(1000 if mode == "full_file" else 40),
+        max_chars_per_file=(1000 if mode == "full_file" else 40),
     )
     return bundle, selected_file
 
@@ -137,22 +153,67 @@ def test_symbol_evidence_reaches_rendered_context_in_every_content_mode(tmp_path
     assert selected.context_role == "reference"
 
 
-@pytest.mark.parametrize("mode", ["full_file", "semantic_chunk", "truncated"])
+@pytest.mark.parametrize(
+    "mode",
+    ["full_file", "semantic_chunk", "truncated"],
+)
 def test_symbol_metadata_does_not_replace_source_or_change_existing_budget(
-    tmp_path, mode
+    tmp_path,
+    mode,
 ):
-    original, _ = build_bundle(tmp_path, mode, with_symbols=False)
-    enhanced, _ = build_bundle(tmp_path, mode, with_symbols=True)
+    original, _ = build_bundle(
+        tmp_path,
+        mode,
+        with_symbols=False,
+    )
+
+    enhanced, _ = build_bundle(
+        tmp_path,
+        mode,
+        with_symbols=True,
+    )
+
     renderer = ContextRenderer()
+
     before = renderer.render(original)
     after = renderer.render(enhanced)
+
     before_payload = json.loads(before.user_message)
     after_payload = json.loads(after.user_message)
+
+    # 1. System Prompt 不应改变
     assert before.system_message == after.system_message
+
+    # 2. Symbol Metadata 不应改变原有预算
     assert enhanced.budget == original.budget
-    assert "symbol_evidence" not in before_payload["code_context"][0]
-    after_payload["code_context"][0].pop("symbol_evidence")
-    assert after_payload == before_payload
+
+    before_item = before_payload["code_context"][0]
+    after_item = after_payload["code_context"][0]
+
+    # 3. 原始 Context 没有 Symbol Evidence
+    assert "symbol_evidence" not in before_item
+
+    # 4. 增强后应该有 Symbol Evidence
+    assert "symbol_evidence" in after_item
+
+    # 5. 新增符号元数据不能改变实际源码
+    assert after_item["content"] == before_item["content"]
+
+    # 6. 不应改变内容模式
+    assert after_item["content_mode"] == before_item["content_mode"]
+
+    # 7. 不应改变源码行号
+    assert after_item["start_line"] == before_item["start_line"]
+
+    assert after_item["end_line"] == before_item["end_line"]
+
+    # 8. 不得扩大 Change Surface
+    assert after_payload["change_surface"] == before_payload["change_surface"]
+
+    # 9. Symbol Evidence 必须来自实际检索候选
+    assert after_item["symbol_evidence"]["purpose"] == ("read_context_only")
+
+    assert len(after_item["symbol_evidence"]["candidates"]) == 2
 
 
 def test_copying_evidence_does_not_mutate_the_retrieval_candidate(tmp_path):

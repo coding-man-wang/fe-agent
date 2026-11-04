@@ -1,7 +1,17 @@
 import pytest
 
 from agent_core.llm.model import ChatResponse
-from agent_core.sdd.model import RequirementSpec
+
+from agent_core.sdd.model import (
+    RequirementSpec,
+    RequirementPatch,
+    StringListPatch,
+)
+
+from agent_core.sdd.patch import (
+    apply_requirement_patch,
+)
+
 from agent_core.sdd.validation import RequireValidator
 
 

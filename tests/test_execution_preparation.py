@@ -200,7 +200,7 @@ def test_rejects_unprovided_target_file(
 
     with pytest.raises(
         PreparationError,
-        match="不在已验证的 Context",
+        match="修改目标超出 Change Surface",
     ):
         preparer.prepare(
             task_id="TASK-003",

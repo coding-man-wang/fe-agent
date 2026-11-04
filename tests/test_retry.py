@@ -175,7 +175,10 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         with patch("agent_core.llm.openai.AsyncOpenAI") as client:
             OpenAILLM("test", "dummy-test-key", "https://example.invalid/v1")
         self.assertEqual(client.call_args.kwargs["max_retries"], 0)
-        self.assertEqual(client.call_args.kwargs["timeout"], 30.0)
+        self.assertEqual(
+            client.call_args.kwargs["timeout"],
+            60.0,
+        )
 
     async def test_provider_error_mapping(self):
         # SDK errors only: no network calls.

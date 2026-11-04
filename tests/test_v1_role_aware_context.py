@@ -1,6 +1,10 @@
-from agent_core.change_surface import RoleAwareContextPolicy, ResolvedChangeSurface
 from agent_core.codebase.model import HybridRelevantFile, HybridRelevantFileSelection
 from agent_core.sdd.model import TaskDefinition
+from agent_core.change_surface import (
+    RoleAwareContextPolicy,
+    ResolvedChangeSurface,
+    RoleBudget,
+)
 
 
 def f(path: str, rank: int) -> HybridRelevantFile:
@@ -57,7 +61,15 @@ def test_role_aware_context_drops_unclassified_noise():
         objective="change",
         source_step_order=2,
     )
-    refined = RoleAwareContextPolicy().apply(
+    refined = RoleAwareContextPolicy(
+        default_budget=RoleBudget(
+            implementation_target=4,
+            dependency=3,
+            reference=1,
+            test=1,
+            context_only=0,
+        )
+    ).apply(
         selection=selection,
         surface=surface,
         task=task,

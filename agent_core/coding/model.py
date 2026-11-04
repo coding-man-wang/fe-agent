@@ -197,15 +197,3 @@ CodeChangeAction = Literal[
     "modify",
     "create",
 ]
-
-
-class ProposedCodeChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    relative_path: str
-
-    action: CodeChangeAction = "modify"
-
-    objective: str = Field(min_length=1)
-
-    proposed_approach: str = Field(min_length=1)

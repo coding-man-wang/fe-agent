@@ -16,10 +16,18 @@ class RetryPolicy(BaseModel):
     initial_delay: float = Field(default=1.0, ge=0)
 
     # 指数退避（下一次重试等待时间翻倍）
-    backoff_factor: float = Field(default=2.0, ge=0)
+    backoff_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        allow_inf_nan=False,
+    )
 
     # 单次最大等待时间
-    max_delay: float = Field(default=10.0, ge=1)
+    max_delay: float = Field(
+        default=10.0,
+        ge=1.0,
+        allow_inf_nan=False,
+    )
 
     # 分散重试
     jitter: bool = True

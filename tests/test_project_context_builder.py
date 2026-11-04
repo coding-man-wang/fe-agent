@@ -83,7 +83,7 @@ def create_task() -> TaskDefinition:
 
 
 def create_repository_profile(
-        root: Path,
+    root: Path,
 ) -> RepositoryProfile:
     return RepositoryProfile(
         project_name="admin-web",
@@ -113,10 +113,10 @@ def create_repository_profile(
 
 
 def create_selection(
-        *,
-        path: str,
-        size_bytes: int,
-        semantic_chunk: CodeChunk | None = None,
+    *,
+    path: str,
+    size_bytes: int,
+    semantic_chunk: CodeChunk | None = None,
 ) -> HybridRelevantFileSelection:
     relevant_file = HybridRelevantFile(
         relative_path=path,
@@ -148,7 +148,7 @@ def create_selection(
 
 
 def test_small_file_uses_full_content(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     src = tmp_path / "src"
     src.mkdir()
@@ -201,7 +201,7 @@ export function getUserList() {
 
 
 def test_large_file_uses_semantic_chunk(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     src = tmp_path / "src"
     src.mkdir()
@@ -211,7 +211,17 @@ def test_large_file_uses_semantic_chunk(
 
     file_path = views / "UserList.vue"
 
-    large_content = "const unrelated = 1\n" * 500
+    # 构造 500 行源码
+    lines = ["const unrelated = 1"] * 500
+
+    # 第 100~102 行放入真实相关代码
+    lines[99:102] = [
+        "async function loadUsers() {",
+        "    return getUserList(filters)",
+        "}",
+    ]
+
+    large_content = "\n".join(lines)
 
     file_path.write_text(
         large_content,
@@ -219,31 +229,27 @@ def test_large_file_uses_semantic_chunk(
     )
 
     semantic_chunk = CodeChunk(
-        chunk_id=("src/views/" "UserList.vue:100-110"),
-        relative_path=("src/views/UserList.vue"),
+        chunk_id="src/views/UserList.vue:100-102",
+        relative_path="src/views/UserList.vue",
         start_line=100,
-        end_line=110,
-        content="""
-async function loadUsers() {
-    return getUserList(filters)
-}
-""".strip(),
+        end_line=102,
+        content="\n".join(lines[99:102]),
         language="Vue",
         category="source",
     )
 
     selection = create_selection(
-        path=("src/views/UserList.vue"),
+        path="src/views/UserList.vue",
         size_bytes=len(large_content.encode("utf-8")),
-        semantic_chunk=(semantic_chunk),
+        semantic_chunk=semantic_chunk,
     )
 
     context = ProjectContextBuilder().build(
         repository_root=tmp_path,
-        requirement=(create_requirement()),
-        technical_spec=(create_technical_spec()),
+        requirement=create_requirement(),
+        technical_spec=create_technical_spec(),
         task=create_task(),
-        repository=(create_repository_profile(tmp_path)),
+        repository=create_repository_profile(tmp_path),
         selection=selection,
         max_files=5,
         max_total_chars=10_000,
@@ -253,16 +259,17 @@ async function loadUsers() {
     item = context.code_context[0]
 
     assert item.content_mode == "semantic_chunk"
-
     assert "getUserList" in item.content
-
     assert item.start_line == 100
+    assert item.end_line == 102
+
+    assert item.content == semantic_chunk.content
 
     assert "src/views/UserList.vue" in context.budget.compressed_files
 
 
 def test_large_file_without_chunk_is_truncated(
-        tmp_path: Path,
+    tmp_path: Path,
 ):
     src = tmp_path / "src"
     src.mkdir()
@@ -297,4 +304,12 @@ def test_large_file_without_chunk_is_truncated(
 
     assert item.content_mode == "truncated"
 
-    assert item.content_chars == 100
+    assert item.content_chars == 84
+    assert item.content_chars <= 100
+
+    assert item.content == "\n".join(["const value = 1;"] * 5)
+
+    assert item.start_line == 1
+    assert item.end_line == 5
+
+    assert context.budget.used_chars == item.content_chars
