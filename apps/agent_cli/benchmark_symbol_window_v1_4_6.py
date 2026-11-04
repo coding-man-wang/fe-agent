@@ -100,6 +100,12 @@ from agent_core.benchmark.context_file_quality import (
     ContextFileOracle,
     ContextFileQualityEvaluator,
 )
+from agent_core.benchmark.task_rerank_diagnostics import (
+    TaskRerankDiagnosticRunner,
+)
+from agent_core.codebase.openai_reranker import (
+    OpenAICompatibleReranker,
+)
 
 RAW_REQUIREMENT = "给订单列表增加状态筛选，" "不要修改用户列表"
 
@@ -203,6 +209,7 @@ async def run_real_benchmark(
     *,
     include_ab: bool = False,
     include_noise_shadow: bool = False,
+    include_rerank_shadow: bool = False,
 ):
 
     repository_root = resolve_repository_root()
@@ -437,6 +444,62 @@ async def run_real_benchmark(
             "file_quality": (file_quality.model_dump(mode="json")),
         }
 
+    rerank_shadow = None
+
+    if include_rerank_shadow:
+        required_envs = [
+            "RERANK_MODEL_ID",
+            "RERANK_API_KEY",
+            "RERANK_BASE_URL",
+        ]
+
+        missing_envs = [name for name in required_envs if not os.getenv(name)]
+
+        if missing_envs:
+            raise RuntimeError("Rerank Shadow 缺少环境配置: " + ", ".join(missing_envs))
+
+        reranker = OpenAICompatibleReranker(
+            model=os.environ["RERANK_MODEL_ID"],
+            api_key=os.environ["RERANK_API_KEY"],
+            base_url=os.environ["RERANK_BASE_URL"],
+            request_timeout_seconds=60,
+        )
+
+        runner = TaskRerankDiagnosticRunner(
+            reranker=reranker,
+            max_document_chars=6000,
+        )
+
+        # 使用 P1 Shadow 结果，而非正式 Selection
+        proposal = GraphEvidenceFilter().propose(
+            selection=context_selection.selection,
+        )
+
+        # 订单任务：应该优先关联订单实现链路
+        order_diagnostic = await runner.run(
+            query=RAW_REQUIREMENT,
+            repository_root=repository_root,
+            selection=proposal.selection,
+        )
+
+        # 用户任务对照：同一个 UserFilters.vue
+        # 在不同任务中是否具有不同相关度
+        user_diagnostic = await runner.run(
+            query=("修改用户列表状态筛选能力，" "保持订单列表行为不变"),
+            repository_root=repository_root,
+            selection=proposal.selection,
+        )
+
+        rerank_shadow = {
+            "mode": "shadow",
+            "selection_changed": False,
+            "candidate_paths": [
+                item.relative_path for item in proposal.selection.selected_files
+            ],
+            "order_task": order_diagnostic.model_dump(mode="json"),
+            "user_control_task": user_diagnostic.model_dump(mode="json"),
+        }
+
     # ==================================
     # 注意：
     #
@@ -511,6 +574,9 @@ async def run_real_benchmark(
 
     if noise_shadow is not None:
         result["noise_shadow"] = noise_shadow
+
+    if rerank_shadow is not None:
+        result["rerank_shadow"] = rerank_shadow
 
     return result
 
