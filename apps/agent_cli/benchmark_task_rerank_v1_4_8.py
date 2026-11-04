@@ -38,7 +38,11 @@ async def main() -> None:
 
     # 本阶段只检查诊断是否完整，
     # 不把排名质量直接作为通过门槛。
-    completed = order_task["status"] == "complete" and user_task["status"] == "complete"
+    completed = (
+        order_task["status"] == "complete"
+        and user_task["status"] == "complete"
+        and rerank["filter_shadow"]["passed"]
+    )
 
     user_filters = "src/components/UserFilters.vue"
 
@@ -65,6 +69,7 @@ async def main() -> None:
             "symbol_status": (result["noise_shadow"]["symbol_evaluation"]["status"]),
             "file_recall": (result["noise_shadow"]["file_quality"]["recall"]),
         },
+        "filter_shadow": rerank["filter_shadow"],
     }
 
     print(

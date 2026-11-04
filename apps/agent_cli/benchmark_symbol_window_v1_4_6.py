@@ -106,6 +106,9 @@ from agent_core.benchmark.task_rerank_diagnostics import (
 from agent_core.codebase.openai_reranker import (
     OpenAICompatibleReranker,
 )
+from agent_core.benchmark.evidence_rerank_filter import (
+    EvidenceProtectedRerankFilter,
+)
 
 RAW_REQUIREMENT = "给订单列表增加状态筛选，" "不要修改用户列表"
 
@@ -490,6 +493,85 @@ async def run_real_benchmark(
             selection=proposal.selection,
         )
 
+        # 当前 P2 实验必须建立在 P1 Graph Shadow 上
+        if not include_noise_shadow:
+            raise ValueError("Rerank Shadow 需要 include_noise_shadow=True")
+
+        filter_policy = EvidenceProtectedRerankFilter()
+
+        # 订单任务：生成候选过滤结果
+        order_filter = filter_policy.propose(
+            selection=proposal.selection,
+            diagnostic=order_diagnostic,
+        )
+
+        # 用户任务：反向验证 UserFilters 不被误删
+        user_filter = filter_policy.propose(
+            selection=proposal.selection,
+            diagnostic=user_diagnostic,
+        )
+
+        # 注意：仍然不修改 context_selection.selection
+        p2_bundle = ProjectContextBuilder().build(
+            repository_root=repository_root,
+            requirement=requirement,
+            technical_spec=technical_spec,
+            task=task,
+            repository=repository,
+            selection=order_filter.selection,
+            engineering_rules=[],
+            max_files=8,
+            max_total_chars=40_000,
+            max_chars_per_file=10_000,
+        )
+
+        p2_symbol_eval = SymbolWindowBenchmarkEvaluator().evaluate(
+            case=SymbolWindowBenchmarkCase(
+                case_id="REAL-ORDER-RERANK-SHADOW",
+                required_symbol_ids=sorted(selected_symbol_ids),
+                require_symbol_window=True,
+                require_independent_symbol_index=True,
+            ),
+            bundle=p2_bundle,
+            repository_root=repository_root,
+            symbol_index=independent_snapshot.symbol_index,
+        )
+
+        # 复用 P1 的独立 Oracle，只能用于 Evaluation。
+        p2_file_quality = ContextFileQualityEvaluator().evaluate(
+            bundle=p2_bundle,
+            oracle=oracle,
+        )
+
+        p2_gates = {
+            "order_filter_proposed": (order_filter.status == "proposed"),
+            "user_control_preserved": (
+                "src/components/UserFilters.vue" not in user_filter.proposed_drops
+            ),
+            "required_file_recall": (p2_file_quality.recall == 1.0),
+            "required_symbol_coverage": (p2_symbol_eval.symbol_coverage == 1.0),
+            "source_integrity": (p2_symbol_eval.source_integrity_preserved),
+            "metadata_integrity": (p2_symbol_eval.metadata_integrity_preserved),
+            "budget_integrity": (p2_symbol_eval.budget_preserved),
+            "noise_not_increased": (
+                p2_file_quality.irrelevant_chars <= file_quality.irrelevant_chars
+            ),
+        }
+
+        filter_shadow = {
+            "status": order_filter.status,
+            "proposed_drops": order_filter.proposed_drops,
+            "reasons": order_filter.reasons,
+            "selected_files": [item.relative_path for item in p2_bundle.code_context],
+            "context_chars": p2_bundle.budget.used_chars,
+            "file_quality": p2_file_quality.model_dump(mode="json"),
+            "symbol_evaluation": p2_symbol_eval.model_dump(mode="json"),
+            "user_control_status": user_filter.status,
+            "user_control_drops": user_filter.proposed_drops,
+            "completion_gates": p2_gates,
+            "passed": all(p2_gates.values()),
+        }
+
         rerank_shadow = {
             "mode": "shadow",
             "selection_changed": False,
@@ -498,6 +580,7 @@ async def run_real_benchmark(
             ],
             "order_task": order_diagnostic.model_dump(mode="json"),
             "user_control_task": user_diagnostic.model_dump(mode="json"),
+            "filter_shadow": filter_shadow,
         }
 
     # ==================================
