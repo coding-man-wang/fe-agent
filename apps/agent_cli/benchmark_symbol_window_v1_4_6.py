@@ -87,6 +87,10 @@ from agent_core.code_intelligence.model import CodeSymbol
 
 from agent_core.code_intelligence.symbol_index import SymbolIndex
 
+from agent_core.benchmark.context_comparison_evaluator import (
+    ContextComparisonEvaluator,
+)
+
 RAW_REQUIREMENT = "给订单列表增加状态筛选，" "不要修改用户列表"
 
 
@@ -185,7 +189,10 @@ def build_retrieval_service(
     )
 
 
-async def run_real_benchmark():
+async def run_real_benchmark(
+    *,
+    include_ab: bool = False,
+):
 
     repository_root = resolve_repository_root()
 
@@ -287,6 +294,54 @@ async def run_real_benchmark():
         max_chars_per_file=10_000,
     )
 
+    comparison = None
+
+    if include_ab:
+        baseline_bundle = ProjectContextBuilder(
+            enable_symbol_windows=False,
+        ).build(
+            repository_root=repository_root,
+            requirement=requirement,
+            technical_spec=technical_spec,
+            task=task,
+            repository=repository,
+            selection=context_selection.selection,
+            engineering_rules=[],
+            max_files=8,
+            max_total_chars=40_000,
+            max_chars_per_file=10_000,
+        )
+
+        # 当前订单场景的候选无关文件。
+        # 需要通过人工审查确认后，才作为固定 Oracle。
+        irrelevant_paths = {
+            "src/components/UserFilters.vue",
+            "src/components/UserTable.vue",
+        }
+
+        selected_paths = {
+            item.relative_path for item in context_selection.selection.selected_files
+        }
+
+        irrelevant_paths &= selected_paths
+
+        selected_symbol_ids_for_ab = sorted(
+            {
+                candidate.symbol_id
+                for file in context_selection.selection.selected_files
+                for candidate in file.symbol_candidates
+            }
+        )
+
+        comparison = ContextComparisonEvaluator().evaluate(
+            case_id="REAL-ORDER-CONTEXT-AB",
+            repository_root=repository_root,
+            symbol_index=independent_snapshot.symbol_index,
+            required_symbol_ids=selected_symbol_ids_for_ab,
+            baseline_bundle=baseline_bundle,
+            enhanced_bundle=bundle,
+            irrelevant_paths=irrelevant_paths,
+        )
     pipeline_symbol_ids = {
         candidate.symbol_id for candidate in context_selection.symbol_candidates
     }
@@ -338,7 +393,7 @@ async def run_real_benchmark():
         symbol_index=independent_snapshot.symbol_index,
     )
 
-    return {
+    result = {
         "repository_root": str(repository_root),
         "symbol_pipeline": {
             "pipeline_symbol_ids": sorted(pipeline_symbol_ids),
@@ -371,6 +426,11 @@ async def run_real_benchmark():
         "budget": (bundle.budget.model_dump(mode="json")),
         "evaluation": (evaluation.model_dump(mode="json")),
     }
+
+    if comparison is not None:
+        result["context_ab"] = comparison.model_dump(mode="json")
+
+    return result
 
 
 def run_synthetic_large_file_benchmark():
