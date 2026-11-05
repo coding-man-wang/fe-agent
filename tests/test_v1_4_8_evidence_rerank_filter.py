@@ -193,3 +193,34 @@ def test_truncated_source_is_protected():
     )
 
     assert proposal.proposed_drops == []
+
+
+def test_protected_dependency_survives_low_rerank_score():
+    selection = make_selection()
+    diagnostic = make_diagnostic(
+        selection,
+        task="order",
+    )
+
+    # 在此前实验中 UserFilters 是低相关候选。
+    # 这里用它模拟一个缺少 Symbol、
+    # 但拥有独立依赖保护证据的文件。
+    #
+    # 该测试仅验证保护机制，不代表
+    # UserFilters 在订单任务中真实必要。
+    protected = {"src/components/UserFilters.vue"}
+
+    result = EvidenceProtectedRerankFilter().propose(
+        selection=selection,
+        diagnostic=diagnostic,
+        protected_paths=protected,
+    )
+
+    assert result.proposed_drops == []
+
+    assert (
+        result.reasons["src/components/UserFilters.vue"]
+        == "protected_anchor_dependency"
+    )
+
+    assert result.selection.selected_count == 6

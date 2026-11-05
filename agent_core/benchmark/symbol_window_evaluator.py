@@ -110,6 +110,9 @@ class SymbolWindowBenchmarkEvaluator:
         covered: set[str] = set()
         localized: set[str] = set()
 
+        # 独立 Required Symbol Oracle 的源码覆盖。
+        # 不依赖 Builder 提供的 symbol_candidates。
+        oracle_covered: set[str] = set()
         issues: list[str] = []
         source_integrity_preserved = True
         metadata_integrity_preserved = True
@@ -206,6 +209,42 @@ class SymbolWindowBenchmarkEvaluator:
             # 独立计算的结果必须与 Builder 声明完全一致。
             independently_missing = item_candidate_ids - item_covered - item_localized
 
+            # ======================================
+            # Independent Oracle Source Coverage
+            #
+            # 即使某个必要 Symbol 没有进入
+            # item.symbol_candidates，
+            # 也要独立检查其真实源码是否存在于 Context。
+            #
+            # 注意：
+            # 不将这些结果写入 item_covered，
+            # 避免干扰 Builder Metadata Integrity 校验。
+            # ======================================
+
+            if symbol_index is not None and audit.valid:
+                for symbol_id in required:
+                    indexed = symbol_index.get_symbol(symbol_id)
+
+                    if indexed is None:
+                        continue
+
+                    if indexed.relative_path != item.relative_path:
+                        continue
+
+                    if not self._valid_range(
+                        start=indexed.start_line,
+                        end=indexed.end_line,
+                        total=len(audit.source_lines),
+                    ):
+                        continue
+
+                    if self._range_fully_covered(
+                        start=indexed.start_line,
+                        end=indexed.end_line,
+                        ranges=audit.complete_ranges,
+                    ):
+                        oracle_covered.add(symbol_id)
+
             reported_covered = set(item.covered_symbol_ids)
             reported_localized = set(item.localized_symbol_ids)
             reported_missing = set(item.missing_symbol_ids)
@@ -227,7 +266,7 @@ class SymbolWindowBenchmarkEvaluator:
             covered.update(item_covered)
             localized.update(item_localized)
 
-        effective_coverage = covered | localized
+        effective_coverage = covered | localized | oracle_covered
         missing = required - effective_coverage
 
         symbol_coverage = len(required & effective_coverage) / len(required)
@@ -294,7 +333,7 @@ class SymbolWindowBenchmarkEvaluator:
             case_id=case.case_id,
             status="passed" if passed else "failed",
             required_symbol_ids=sorted(required),
-            covered_symbol_ids=sorted(required & covered),
+            covered_symbol_ids=sorted(required & (covered | oracle_covered)),
             localized_symbol_ids=sorted(required & localized),
             missing_symbol_ids=sorted(missing),
             symbol_coverage=symbol_coverage,

@@ -57,6 +57,7 @@ class EvidenceProtectedRerankFilter:
         *,
         selection: HybridRelevantFileSelection,
         diagnostic: TaskRerankDiagnosticResult,
+        protected_paths: set[str] | None = None,
     ) -> RerankFilterProposal:
 
         original = selection.model_copy(deep=True)
@@ -113,11 +114,15 @@ class EvidenceProtectedRerankFilter:
 
         eligible = []
         reasons = {}
+        protected_paths = set(protected_paths or ())
 
         for scored in scores:
             item = items[scored.relative_path]
             path = scored.relative_path
 
+            if path in protected_paths:
+                reasons[path] = "protected_anchor_dependency"
+                continue
             # 只尝试过滤一般源码上下文。
             if (
                 item.category != "source"

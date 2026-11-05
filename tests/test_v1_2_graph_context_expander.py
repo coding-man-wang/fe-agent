@@ -448,3 +448,90 @@ def test_expander_respects_context_budget_and_keeps_target_evidence(
     assert result.total_selected_bytes == sum(
         item.size_bytes for item in result.selected_files
     )
+
+
+def test_anchor_dependency_protection_preserves_low_rank_api(
+    tmp_path: Path,
+):
+    src = tmp_path / "src"
+    src.mkdir()
+
+    sources = {
+        "view.ts": ("import './store'\n" "import './extra-a'\n" "import './extra-b'\n"),
+        "store.ts": "import './api'\n",
+        "api.ts": "import './mock'\n",
+        "mock.ts": "export const mock = true\n",
+        "extra-a.ts": "export const a = 1\n",
+        "extra-b.ts": "export const b = 2\n",
+        "ref1.ts": "export const ref1 = 1\n",
+        "ref2.ts": "export const ref2 = 2\n",
+        "ref3.ts": "export const ref3 = 3\n",
+        "other.ts": "export const other = 1\n",
+    }
+
+    for name, content in sources.items():
+        (src / name).write_text(
+            content,
+            encoding="utf-8",
+        )
+
+    index = RepositoryFileIndexer().build(tmp_path)
+    graph = RepositoryDependencyGraphBuilder().build(
+        file_index=index,
+    )
+
+    retrieval_paths = [
+        "src/view.ts",
+        "src/store.ts",
+        "src/ref1.ts",
+        "src/ref2.ts",
+        "src/ref3.ts",
+        "src/api.ts",
+        "src/other.ts",
+        "src/mock.ts",
+    ]
+
+    retrieval = _selection(
+        [
+            _retrieval_file(
+                index=index,
+                relative_path=path,
+                rank=rank,
+            )
+            for rank, path in enumerate(
+                retrieval_paths,
+                start=1,
+            )
+        ]
+    )
+
+    result = RepositoryGraphContextExpander(
+        max_files=8,
+        max_graph_files=3,
+        min_retrieval_files=5,
+        dependency_depth=2,
+        dependent_depth=1,
+        allow_retrieval_replacement=True,
+        protect_anchor_dependencies=True,
+    ).expand(
+        selection=retrieval,
+        index=index,
+        graph=graph,
+    )
+
+    paths = {item.relative_path for item in result.selected_files}
+
+    # 即使 API 和 Mock 的原始排名较低，
+    # 由于它们位于 Anchor 的依赖链中，
+    # 仍然应该保留。
+    assert "src/api.ts" in paths
+    assert "src/mock.ts" in paths
+
+    # 允许真正较弱的 Retrieval 文件被替换。
+    assert "src/other.ts" not in paths
+
+    assert "src/extra-a.ts" in paths
+    assert len(result.selected_files) == 8
+
+    # 输入不能被修改
+    assert retrieval.selected_count == 8

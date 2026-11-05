@@ -15,6 +15,9 @@ from agent_core.codebase.model import (
     HybridRelevantFileSelection,
     RepositoryFileIndex,
 )
+from agent_core.codebase.graph.anchor_dependency_protection import (
+    AnchorDependencyProtection,
+)
 
 GraphRelation = Literal[
     "dependency",
@@ -175,6 +178,8 @@ class RepositoryGraphContextExpander:
         min_retrieval_files: int = 5,
         dependency_depth: int = 2,
         dependent_depth: int = 1,
+        allow_retrieval_replacement: bool = True,
+        protect_anchor_dependencies: bool = False,
     ) -> None:
         if max_files < 1:
             raise ValueError("max_files 必须 >= 1")
@@ -206,6 +211,10 @@ class RepositoryGraphContextExpander:
         self.dependency_depth = dependency_depth
 
         self.dependent_depth = dependent_depth
+
+        self.allow_retrieval_replacement = allow_retrieval_replacement
+
+        self.protect_anchor_dependencies = protect_anchor_dependencies
 
     def expand(
         self,
@@ -250,10 +259,52 @@ class RepositoryGraphContextExpander:
 
         graph_candidates.sort(key=lambda item: item.sort_key)
 
-        graph_budget = self._calculate_graph_budget(
-            base_files=base_files,
-            graph_candidate_count=len(graph_candidates),
-        )
+        dependency_protected_paths = set()
+
+        if self.protect_anchor_dependencies:
+            dependency_protected_paths = AnchorDependencyProtection(
+                anchor_count=max(
+                    1,
+                    self.min_retrieval_files,
+                ),
+                max_depth=self.dependency_depth,
+            ).protected_paths(
+                selection=selection,
+                graph=graph,
+            )
+
+        # ==========================================
+        # v1.4.8-P3-D2
+        # Retrieval Evidence Preservation
+        #
+        # True:
+        #     保持历史策略，允许 Graph 替换弱 Retrieval。
+        #
+        # False:
+        #     Graph 只能使用剩余空位。
+        #     已进入 Retrieval Selection 的文件全部保留。
+        # ==========================================
+
+        if self.allow_retrieval_replacement:
+            graph_budget = self._calculate_graph_budget(
+                base_files=base_files,
+                graph_candidate_count=len(graph_candidates),
+                additional_protected_paths=dependency_protected_paths,
+            )
+        else:
+            if len(base_files) > self.max_files:
+                raise ValueError(
+                    "Retrieval 文件数量超过 Graph max_files；"
+                    "严格保留模式不能静默丢弃文件"
+                )
+
+            free_slots = self.max_files - len(base_files)
+
+            graph_budget = min(
+                self.max_graph_files,
+                len(graph_candidates),
+                free_slots,
+            )
 
         # ---------------------------------------
         # Graph Candidate 需要真正占用多少个
@@ -283,7 +334,8 @@ class RepositoryGraphContextExpander:
 
         chosen_base_files = self._choose_base_files(
             base_files=base_files,
-            replacement_count=(replacement_count),
+            replacement_count=replacement_count,
+            additional_protected_paths=dependency_protected_paths,
         )
 
         chosen_graph_candidates = graph_candidates[:graph_budget]
@@ -559,6 +611,7 @@ class RepositoryGraphContextExpander:
         *,
         base_files: list[HybridRelevantFile],
         graph_candidate_count: int,
+        additional_protected_paths: set[str] | None = None,
     ) -> int:
         """
         计算 Graph Expansion 真正可以使用的 Context Slot。
@@ -598,6 +651,8 @@ class RepositoryGraphContextExpander:
             base_files=base_files,
         )
 
+        protected_paths.update(additional_protected_paths or set())
+
         replaceable_count = sum(
             1
             for item in base_files
@@ -620,6 +675,7 @@ class RepositoryGraphContextExpander:
         *,
         base_files: list[HybridRelevantFile],
         replacement_count: int,
+        additional_protected_paths: set[str] | None = None,
     ) -> list[HybridRelevantFile]:
         """
         根据 Graph Expansion 需要的 Slot，
@@ -650,6 +706,8 @@ class RepositoryGraphContextExpander:
         protected_paths = self._build_protected_paths(
             base_files=base_files,
         )
+
+        protected_paths.update(additional_protected_paths or set())
 
         replaceable = [
             item

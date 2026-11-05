@@ -484,3 +484,45 @@ def test_vue_container_localization_is_not_full_coverage(
     assert result.covered_symbol_ids == []
     assert result.localized_symbol_ids == [symbol_id]
     assert result.symbol_coverage == 1.0
+
+
+def test_oracle_symbol_covered_without_candidate(
+    tmp_path: Path,
+):
+    path = tmp_path / "src" / "demo.ts"
+    path.parent.mkdir(parents=True)
+    path.write_text(SOURCE, encoding="utf-8")
+
+    item = CodeContextItem(
+        relative_path="src/demo.ts",
+        category="source",
+        language="TypeScript",
+        content_mode="full_file",
+        content=SOURCE,
+        start_line=1,
+        end_line=len(SOURCE.split("\n")),
+        symbol_candidates=[],
+        covered_symbol_ids=[],
+        localized_symbol_ids=[],
+        missing_symbol_ids=[],
+        content_chars=len(SOURCE),
+        source_file_chars=len(SOURCE),
+    )
+
+    result = SymbolWindowBenchmarkEvaluator().evaluate(
+        case=SymbolWindowBenchmarkCase(
+            case_id="ORACLE-SOURCE-COVERAGE",
+            required_symbol_ids=[SYMBOL_ID],
+            require_symbol_window=False,
+            require_independent_symbol_index=True,
+        ),
+        bundle=make_bundle(tmp_path, item),
+        repository_root=tmp_path,
+        symbol_index=make_index(),
+    )
+
+    assert result.status == "passed"
+    assert result.symbol_coverage == 1.0
+    assert result.covered_symbol_ids == [SYMBOL_ID]
+    assert result.metadata_integrity_preserved
+    assert result.source_integrity_preserved
