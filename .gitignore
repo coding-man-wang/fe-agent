@@ -1,1 +1,4 @@
 .env
+
+# Shadow benchmark audit output
+var/audit/

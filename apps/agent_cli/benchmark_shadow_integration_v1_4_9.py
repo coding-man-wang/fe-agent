@@ -23,7 +23,7 @@ from apps.agent_cli.benchmark_symbol_window_v1_4_6 import (
 import os
 
 from agent_core.benchmark.shadow_audit import (
-    JsonlShadowAuditSink,
+    JsonlShadowAuditStore,
 )
 
 
@@ -38,15 +38,24 @@ async def main():
 
     reports = []
 
-    audit_path = os.getenv("FE_AGENT_SHADOW_AUDIT_PATH")
+    audit_path = os.getenv(
+        "FE_AGENT_SHADOW_AUDIT_PATH",
+        "var/audit/context_shadow_v1_4_9.jsonl",
+    )
 
-    audit_sink = JsonlShadowAuditSink(audit_path) if audit_path else None
+    audit_store = JsonlShadowAuditStore(
+        path=audit_path,
+    )
 
-    def emit_report(report):
+    audited_task_ids: set[str] = set()
+
+    def emit_report(report: dict):
         reports.append(report)
 
-        if audit_sink is not None:
-            audit_sink(report)
+        # 只有持久化成功才记录完成。
+        audit_store.append(report)
+
+        audited_task_ids.add(report["task_id"])
 
     service = ShadowTaskContextSelectionService(
         delegate=delegate,
@@ -75,6 +84,15 @@ async def main():
 
         report = reports[-1] if len(reports) > before else {"status": "missing_report"}
 
+        binding = report.get("evidence_binding") or {}
+
+        evidence_valid = (
+            binding.get("source_matched") is True
+            and binding.get("selection_matched") is True
+        )
+
+        audit_written = case.case_id in audited_task_ids
+
         results.append(
             {
                 "case_id": case.case_id,
@@ -82,16 +100,20 @@ async def main():
                     item.relative_path for item in result.selection.selected_files
                 ],
                 "shadow_report": report,
+                "evidence_valid": evidence_valid,
+                "audit_written": audit_written,
                 "passed": (
                     report.get("status") == "complete"
                     and report.get("applied") is False
                     and report.get("selection_unchanged") is True
+                    and evidence_valid
+                    and audit_written
                 ),
             }
         )
 
     output = {
-        "version": "v1.4.9-P0",
+        "version": "v1.4.9-P1",
         "mode": "shadow",
         "repository_revision": revision,
         "total_cases": len(results),

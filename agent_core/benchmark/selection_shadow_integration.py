@@ -1,4 +1,6 @@
 from __future__ import annotations
+import hashlib
+from time import perf_counter
 
 import asyncio
 import logging
@@ -24,9 +26,6 @@ from agent_core.codebase.task_context_selection import (
     TaskContextSelectionService,
 )
 from agent_core.sdd.model import RequirementSpec, TaskDefinition
-import hashlib
-from time import perf_counter
-
 from agent_core.benchmark.selection_evidence_binding import (
     capture_selection_evidence,
 )
@@ -43,7 +42,7 @@ class ShadowPolicyConfig:
 
     def __post_init__(self):
         if self.mode not in {"off", "shadow"}:
-            raise ValueError("v1.4.9-P0 仅支持 off / shadow")
+            raise ValueError("v1.4.9-P1 仅支持 off / shadow")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds 必须大于 0")
 

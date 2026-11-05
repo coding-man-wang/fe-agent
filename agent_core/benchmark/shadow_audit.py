@@ -81,36 +81,49 @@ def selection_source_digest(
 
 class JsonlShadowAuditStore:
     """
-    P1 策略审计记录。
+    v1.4.9-P1 Shadow Audit Store.
 
-    仅持久化白名单字段，避免意外写入
-    Prompt、源码内容或模型凭据。
+    审计字段使用白名单：
+    - 保留策略版本和执行结果
+    - 保留源码及 Selection 指纹
+    - 保留删除建议及异常原因
+    - 不持久化原始 Prompt、源码和 API Key
     """
 
-    ALLOWED_FIELDS = frozenset(
-        {
-            "policy_version",
-            "mode",
-            "task_id",
-            "repository_revision",
-            "applied",
-            "status",
-            "reason",
-            "baseline_file_count",
-            "proposed_file_count",
-            "graph_proposed_drops",
-            "rerank_proposed_drops",
-            "effective_proposed_drops",
-            "rerank_status",
-            "rerank_filter_status",
-            "source_before_sha256",
-            "source_after_sha256",
-            "source_consistent",
-            "selection_unchanged",
-        }
+    SIMPLE_FIELDS = (
+        "policy_version",
+        "mode",
+        "task_id",
+        "repository_revision",
+        "requirement_sha256",
+        "applied",
+        "status",
+        "reason",
+        "baseline_file_count",
+        "proposed_file_count",
+        "graph_proposed_drops",
+        "rerank_proposed_drops",
+        "effective_proposed_drops",
+        "rerank_status",
+        "rerank_filter_status",
+        "selection_unchanged",
+        "elapsed_ms",
     )
 
-    def __init__(self, *, path: str | Path):
+    EVIDENCE_FIELDS = (
+        "selection_sha256",
+        "source_sha256_before",
+        "source_sha256_after",
+        "source_matched",
+        "selection_matched",
+        "changed_paths",
+    )
+
+    def __init__(
+        self,
+        *,
+        path: str | Path,
+    ) -> None:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(
             parents=True,
@@ -123,14 +136,25 @@ class JsonlShadowAuditStore:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        for key in self.ALLOWED_FIELDS:
+        # 普通审计字段
+        for key in self.SIMPLE_FIELDS:
             if key in report:
                 event[key] = report[key]
 
+        # 证据版本绑定字段
+        binding = report.get("evidence_binding")
+
+        if isinstance(binding, dict):
+            event["evidence_binding"] = {
+                key: binding[key] for key in self.EVIDENCE_FIELDS if key in binding
+            }
+
+        # 不序列化 report 的其他未知字段
         line = json.dumps(
             event,
             ensure_ascii=False,
             separators=(",", ":"),
+            allow_nan=False,
         )
 
         with self.path.open(
