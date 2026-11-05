@@ -25,6 +25,9 @@ import os
 from agent_core.benchmark.shadow_audit import (
     JsonlShadowAuditStore,
 )
+from agent_core.benchmark.selection_snapshot_gate import (
+    ShadowSnapshotGate,
+)
 
 
 async def main():
@@ -69,6 +72,8 @@ async def main():
         emit=emit_report,
     )
 
+    snapshot_gate = ShadowSnapshotGate()
+
     results = []
 
     for case in build_cases():
@@ -83,6 +88,16 @@ async def main():
         )
 
         report = reports[-1] if len(reports) > before else {"status": "missing_report"}
+
+        snapshot_decision = snapshot_gate.validate(
+            report=report,
+            repository_root=root,
+            selection=result.selection,
+            task_id=case.case_id,
+            raw_requirement=case.raw_requirement,
+            expected_revision=revision,
+            current_revision=git_command(root, "rev-parse", "HEAD"),
+        )
 
         binding = report.get("evidence_binding") or {}
 
@@ -108,12 +123,17 @@ async def main():
                     and report.get("selection_unchanged") is True
                     and evidence_valid
                     and audit_written
+                    and snapshot_decision.allowed
                 ),
+                "snapshot_gate": {
+                    "allowed": snapshot_decision.allowed,
+                    "reason": snapshot_decision.reason,
+                },
             }
         )
 
     output = {
-        "version": "v1.4.9-P1",
+        "version": "v1.4.9-P2-A",
         "mode": "shadow",
         "repository_revision": revision,
         "total_cases": len(results),
