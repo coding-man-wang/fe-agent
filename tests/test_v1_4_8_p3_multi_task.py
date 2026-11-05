@@ -181,3 +181,18 @@ def test_graph_only_required_dependency_counterexample(
 
     assert after.recall == 0.0
     assert after.missing_required == ["src/sideEffect.ts"]
+
+    # 使用真实 Graph 验证安全保护模式。
+    guarded = GraphEvidenceFilter().propose(
+        selection=expanded,
+        graph=graph,
+    )
+
+    guarded_quality = evaluator.evaluate(
+        bundle=build(guarded.selection),
+        oracle=oracle,
+    )
+
+    assert "src/sideEffect.ts" not in guarded.dropped_paths
+    assert guarded_quality.recall == 1.0
+    assert guarded_quality.missing_required == []

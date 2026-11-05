@@ -304,9 +304,18 @@ async def run_case(
         if snapshot.symbol_index.get_symbol(symbol_id) is None
     ]
 
-    # P1: Graph Shadow
+    dependency_protected = AnchorDependencyProtection(
+        anchor_count=5,
+        max_depth=2,
+    ).protected_paths(
+        selection=result.retrieval_selection,
+        graph=result.graph,
+    )
+
     graph_proposal = GraphEvidenceFilter().propose(
         selection=result.selection,
+        graph=result.graph,
+        protected_paths=dependency_protected,
     )
 
     # P2-A: Rerank Shadow，只观察完整结果。
@@ -314,14 +323,6 @@ async def run_case(
         query=case.raw_requirement,
         repository_root=root,
         selection=graph_proposal.selection,
-    )
-
-    dependency_protected = AnchorDependencyProtection(
-        anchor_count=5,
-        max_depth=2,
-    ).protected_paths(
-        selection=result.retrieval_selection,
-        graph=result.graph,
     )
 
     # P2-B: Evidence-protected Filter Shadow

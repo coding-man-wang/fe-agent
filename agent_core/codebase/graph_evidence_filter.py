@@ -6,6 +6,9 @@ from agent_core.codebase.model import (
     HybridRelevantFile,
     HybridRelevantFileSelection,
 )
+from agent_core.codebase.graph.model import (
+    RepositoryDependencyGraph,
+)
 
 
 @dataclass(frozen=True)
@@ -71,33 +74,71 @@ class GraphEvidenceFilter:
         self,
         *,
         selection: HybridRelevantFileSelection,
+        graph: RepositoryDependencyGraph | None = None,
+        protected_paths: set[str] | None = None,
     ) -> GraphFilterProposal:
+        """
+        P3-D4: Dependency-aware Graph Shadow Filter.
+
+        graph=None 时保持旧实验行为，用于对照测试。
+        真实 P3 Benchmark 必须传入 graph。
+        """
+
+        selected_paths = {item.relative_path for item in selection.selected_files}
+
+        # P3 的 Anchor Dependency Protection 结果。
+        anchor_protected = set(protected_paths or ())
+
+        # 当前 Selection 内存在实际导入关系的文件，
+        # 不能仅因缺少 Symbol Evidence 就删除。
+        direct_import_protected = set()
+
+        if graph is not None:
+            for edge in graph.edges:
+                if (
+                    edge.source_path in selected_paths
+                    and edge.target_path in selected_paths
+                ):
+                    direct_import_protected.add(edge.target_path)
 
         kept = []
         dropped = []
         reasons = {}
 
         for item in selection.selected_files:
+            path = item.relative_path
+
+            if path in anchor_protected:
+                kept.append(item)
+                reasons[path] = "protected_anchor_dependency"
+                continue
+
+            if path in direct_import_protected:
+                kept.append(item)
+                reasons[path] = "protected_direct_import"
+                continue
+
             if self._is_weak_graph_only(item):
-                dropped.append(item.relative_path)
-                reasons[item.relative_path] = (
-                    "仅有 Graph Evidence；" "缺少独立 Retrieval 和 Symbol Evidence"
+                dropped.append(path)
+                reasons[path] = (
+                    "仅有 Graph Evidence，"
+                    "无直接检索或符号证据，"
+                    "且不在受保护的依赖集合中"
                 )
                 continue
 
             kept.append(item)
 
-        # 不允许把 Selection 过滤为空
         if not kept:
             return GraphFilterProposal(
                 selection=selection.model_copy(deep=True),
-                reasons={"selection": ("过滤后无剩余文件；" "保留原 Selection")},
+                reasons={"_decision": "empty_selection_guard"},
             )
 
         filtered = selection.model_copy(
             deep=True,
             update={
-                "selected_files": kept,
+                "selected_files": [item.model_copy(deep=True) for item in kept],
                 "selected_count": len(kept),
                 "total_selected_bytes": sum(item.size_bytes for item in kept),
             },

@@ -9,6 +9,14 @@ from agent_core.codebase.symbol_retrieval_model import (
     SymbolCandidate,
 )
 
+import pytest
+
+from agent_core.codebase.graph.model import (
+    GraphFileNode,
+    RepositoryDependencyEdge,
+    RepositoryDependencyGraph,
+)
+
 
 def make_file(
     path,
@@ -112,3 +120,69 @@ def test_filter_keeps_semantic_only_file():
 
     assert proposal.dropped_paths == []
     assert proposal.selection.selected_count == 1
+
+
+@pytest.mark.parametrize(
+    "import_kind",
+    ["value", "type", "side_effect", "dynamic", "reexport"],
+)
+def test_graph_filter_preserves_direct_imports(import_kind):
+    anchor = make_file(
+        "src/main.ts",
+        semantic_hits=3,
+    )
+
+    dependency = make_file(
+        "src/init.ts",
+        graph=True,
+    )
+
+    selection = make_selection(
+        [
+            anchor,
+            dependency,
+        ]
+    )
+
+    graph = RepositoryDependencyGraph(
+        root_path=".",
+        nodes=[
+            GraphFileNode(
+                relative_path="src/main.ts",
+                category="source",
+            ),
+            GraphFileNode(
+                relative_path="src/init.ts",
+                category="source",
+            ),
+        ],
+        edges=[
+            RepositoryDependencyEdge(
+                source_path="src/main.ts",
+                target_path="src/init.ts",
+                import_kind=import_kind,
+                specifier="./init",
+                line_number=1,
+            ),
+        ],
+    )
+
+    # 原有弱 Graph Filter 会移除该文件。
+    legacy = GraphEvidenceFilter().propose(
+        selection=selection,
+    )
+
+    assert legacy.dropped_paths == ["src/init.ts"]
+
+    # 新增直接导入保护后必须保留。
+    guarded = GraphEvidenceFilter().propose(
+        selection=selection,
+        graph=graph,
+    )
+
+    assert guarded.dropped_paths == []
+    assert guarded.selection.selected_count == 2
+    assert guarded.reasons["src/init.ts"] == ("protected_direct_import")
+
+    # 不得修改原输入
+    assert selection.selected_count == 2
