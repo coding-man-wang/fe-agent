@@ -339,4 +339,77 @@ class ExecutionPreparer:
 
             return
 
+        # ======================================
+        # v1.4.9-P4-B-D1
+        # Symbol Window Freshness Validation
+        #
+        # 与 SymbolWindowBuilder._render_spans()
+        # 的渲染协议严格保持一致。
+        # ======================================
+        if item.content_mode == "symbol_window":
+
+            if not item.segments:
+                raise PreparationError("Symbol Window 缺少 Source Segments")
+
+            if item.start_line is not None or item.end_line is not None:
+                raise PreparationError("Symbol Window 不能伪装为连续源码范围")
+
+            if item.missing_symbol_ids:
+                raise PreparationError(
+                    "Symbol Window 存在未覆盖的必要 Symbol: "
+                    + ", ".join(item.missing_symbol_ids)
+                )
+
+            if item.content_chars != len(item.content):
+                raise PreparationError("Symbol Window 内容长度元数据不一致")
+
+            # 此项只能发现长度变化，不能替代完整
+            # Source SHA-256 校验。
+            if item.source_file_chars != len(current_content):
+                raise PreparationError(
+                    "Symbol Window 源码长度已发生变化: " f"{item.relative_path}"
+                )
+
+            # 注意：必须使用 split("\n")。
+            # 与 SymbolWindowBuilder._source_lines()
+            # 保持完全相同的行号语义。
+            lines = current_content.split("\n")
+
+            parts: list[str] = []
+            previous_end = 0
+
+            for segment in item.segments:
+
+                start = segment.start_line
+                end = segment.end_line
+
+                if start < 1 or end < start or end > len(lines):
+                    raise PreparationError(
+                        "Symbol Window 行号非法或越界: "
+                        f"{item.relative_path}:"
+                        f"{start}-{end}"
+                    )
+
+                # Builder 已合并重叠或相邻段。
+                # 因此这里拒绝乱序、重叠及相邻段。
+                if previous_end > 0 and start <= previous_end + 1:
+                    raise PreparationError(
+                        "Symbol Window Segments "
+                        "存在乱序、重叠或未合并的相邻范围: "
+                        f"{item.relative_path}"
+                    )
+
+                parts.append("\n".join(lines[start - 1 : end]))
+
+                previous_end = end
+
+            # Builder 在非连续片段之间使用
+            # 两个换行符，不添加任何虚构源码。
+            reconstructed = "\n\n".join(parts)
+
+            if reconstructed != item.content:
+                raise PreparationError("Symbol Window 已过期: " f"{item.relative_path}")
+
+            return
+
         raise PreparationError(f"未知的内容模式: {item.content_mode}")

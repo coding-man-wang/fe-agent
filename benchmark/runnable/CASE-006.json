@@ -23,6 +23,7 @@
     ],
     "allowed_change_files": [
       "tests/unit/usersStore.test.ts",
+      "tests/unit/UsersView.test.ts",
       "tests/e2e/users.spec.ts"
     ],
     "forbidden_change_files": [
