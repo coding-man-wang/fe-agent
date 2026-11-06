@@ -7,6 +7,16 @@ from dotenv import load_dotenv
 
 import os
 
+import hashlib
+
+from agent_core.benchmark.case_loader import BenchmarkCaseLoader
+from agent_core.benchmark.full_execution_active_preflight import (
+    evaluate_active_preflight,
+)
+from apps.agent_cli.benchmark_multi_task_v1_4_8 import (
+    git_command,
+)
+
 from agent_core.benchmark.full_execution_context_shadow import (
     FullExecutionContextShadowObserver,
 )
@@ -87,7 +97,110 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--context-active-preflight",
+        action="store_true",
+        help=("只检查受控 Active 实验的准入条件，" "不调用模型、不执行 Full Execution"),
+    )
+
+    parser.add_argument(
+        "--active-task-id",
+        default=None,
+        help="本次申请实验的 Task ID",
+    )
+
+    parser.add_argument(
+        "--approved-revision",
+        default=None,
+        help="明确批准的目标仓库初始 Commit SHA",
+    )
+
     return parser.parse_args()
+
+
+def _run_active_preflight(
+    *,
+    args,
+    fe_agent_root: Path,
+    benchmark_repository: Path,
+) -> None:
+    """
+    纯前置检查执行路径。
+
+    禁止初始化 LLM、Retrieval、Worktree、
+    FullExecutionBenchmarkService。
+    """
+    if args.context_shadow or args.refresh_upstream:
+        raise SystemExit(
+            "Active Preflight 不能与 "
+            "--context-shadow / --refresh-upstream "
+            "同时使用"
+        )
+
+    if not args.active_task_id:
+        raise SystemExit("必须显式提供 --active-task-id")
+
+    if not args.approved_revision:
+        raise SystemExit("必须显式提供 --approved-revision")
+
+    case = BenchmarkCaseLoader(fe_agent_root / "benchmark").load(args.case_id)
+
+    current_revision = git_command(
+        benchmark_repository,
+        "rev-parse",
+        "HEAD",
+    )
+
+    repository_dirty = bool(
+        git_command(
+            benchmark_repository,
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        )
+    )
+
+    # 只读取既有 Canary，不在 Preflight 中重新调用模型。
+    canary_path = fe_agent_root / "var" / "canary" / "context_policy_v1_4_9.json"
+
+    canary = None
+    canary_sha256 = None
+
+    try:
+        raw = canary_path.read_bytes()
+
+        canary_sha256 = hashlib.sha256(raw).hexdigest()
+
+        canary = json.loads(raw.decode("utf-8"))
+
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
+        # 缺失、格式损坏均由 Gate 拒绝。
+        pass
+
+    result = evaluate_active_preflight(
+        case=case,
+        task_id=args.active_task_id,
+        approved_revision=args.approved_revision,
+        current_revision=current_revision,
+        repository_dirty=repository_dirty,
+        canary_report=canary,
+        canary_sha256=canary_sha256,
+    )
+
+    print(
+        json.dumps(
+            result.to_dict(),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    if result.status != "passed":
+        raise SystemExit(2)
 
 
 def create_full_execution_shadow_observer():
@@ -402,6 +515,23 @@ async def main():
     fe_agent_root = Path(__file__).resolve().parents[2]
     benchmark_repository = Path(r"D:\project\fe-agent-benchmark-web")
     case_id = args.case_id
+
+    # ======================================
+    # v1.4.9-P4-B-D2-A
+    # Active Preflight 专用执行分支
+    # ======================================
+    if args.context_active_preflight:
+        _run_active_preflight(
+            args=args,
+            fe_agent_root=fe_agent_root,
+            benchmark_repository=benchmark_repository,
+        )
+        return
+
+    # 防止普通 Full Execution 意外接受
+    # Active 的授权参数却不执行准入检查。
+    if args.active_task_id is not None or args.approved_revision is not None:
+        raise SystemExit("Active 参数只能与 " "--context-active-preflight 一起使用")
 
     dependency_preflight = NodeModulesWorkspaceProvisioner(
         dependency_source_root=benchmark_repository
