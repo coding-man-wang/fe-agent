@@ -108,6 +108,12 @@ class JsonlShadowAuditStore:
         "rerank_filter_status",
         "selection_unchanged",
         "elapsed_ms",
+        "event_type",
+        "context_status",
+        "context_reason",
+        "snapshot_gate_reason",
+        "context_files_before",
+        "context_files_after",
     )
 
     EVIDENCE_FIELDS = (

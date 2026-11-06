@@ -213,7 +213,7 @@ class ShadowTaskContextSelectionService:
         baseline = result.selection.model_dump(mode="json")
 
         report: dict[str, Any] = {
-            "policy_version": "v1.4.9-P0",
+            "policy_version": "v1.4.9-P1",
             "mode": "shadow",
             "task_id": task.task_id,
             "repository_revision": result.repository_revision,

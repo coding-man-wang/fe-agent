@@ -112,21 +112,13 @@ class ShadowSnapshotGate:
         if not isinstance(drops, list):
             return deny("invalid_proposed_drops")
 
+        if not all(isinstance(path, str) and bool(path.strip()) for path in drops):
+            return deny("invalid_proposed_drops")
+
         selected_paths = {item.relative_path for item in selection.selected_files}
 
-        if (
-            len(drops) != len(set(drops))
-            or not all(isinstance(path, str) for path in drops)
-            or not set(drops).issubset(selected_paths)
-        ):
+        if len(drops) != len(set(drops)) or not set(drops).issubset(selected_paths):
             return deny("proposal_path_mismatch")
-
-        if report.get("baseline_file_count") != len(
-            selection.selected_files
-        ) or report.get("proposed_file_count") != len(selection.selected_files) - len(
-            drops
-        ):
-            return deny("proposal_count_mismatch")
 
         # 6. 重新读取磁盘文件。
         try:

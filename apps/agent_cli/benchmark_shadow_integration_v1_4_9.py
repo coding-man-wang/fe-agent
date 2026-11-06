@@ -28,6 +28,12 @@ from agent_core.benchmark.shadow_audit import (
 from agent_core.benchmark.selection_snapshot_gate import (
     ShadowSnapshotGate,
 )
+from agent_core.benchmark.context_policy_runtime import (
+    ContextRolloutConfig,
+    GuardedContextPolicyConsumer,
+)
+from agent_core.context.builder import ProjectContextBuilder
+from agent_core.codebase.model import RepositoryProfile
 
 
 async def main():
@@ -72,6 +78,26 @@ async def main():
         emit=emit_report,
     )
 
+    policy_consumer = GuardedContextPolicyConsumer(
+        config=ContextRolloutConfig(
+            mode="shadow",  # 本轮默认保持 shadow
+            active_enabled=False,
+            canary_passed=False,
+        ),
+        audit_sink=audit_store.append,
+    )
+
+    context_builder = ProjectContextBuilder()
+
+    repository = RepositoryProfile(
+        project_name="fe-agent-benchmark-web",
+        root_path=str(root),
+        framework="Vue3",
+        language="TypeScript",
+        build_tool="Vite",
+        package_manager="npm",
+    )
+
     snapshot_gate = ShadowSnapshotGate()
 
     results = []
@@ -97,6 +123,31 @@ async def main():
             raw_requirement=case.raw_requirement,
             expected_revision=revision,
             current_revision=git_command(root, "rev-parse", "HEAD"),
+        )
+
+        def build_context(selection):
+            return context_builder.build(
+                repository_root=root,
+                requirement=case.requirement,
+                technical_spec=case.technical_spec,
+                task=case.task,
+                repository=repository,
+                selection=selection,
+                engineering_rules=[],
+                max_files=8,
+                max_total_chars=40_000,
+                max_chars_per_file=10_000,
+            )
+
+        consumption = policy_consumer.consume(
+            repository_root=root,
+            task=case.task,
+            raw_requirement=case.raw_requirement,
+            selection_result=result,
+            report=report,
+            get_current_revision=lambda: git_command(root, "rev-parse", "HEAD"),
+            build_context=build_context,
+            fresh_in_process_report=True,
         )
 
         binding = report.get("evidence_binding") or {}
@@ -128,6 +179,12 @@ async def main():
                 "snapshot_gate": {
                     "allowed": snapshot_decision.allowed,
                     "reason": snapshot_decision.reason,
+                },
+                "context_policy": {
+                    "status": consumption.decision.status,
+                    "reason": consumption.decision.reason,
+                    "files_before": list(consumption.decision.context_files_before),
+                    "files_after": list(consumption.decision.context_files_after),
                 },
             }
         )
