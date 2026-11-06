@@ -169,3 +169,29 @@ def test_unknown_drop_path_is_rejected(snapshot_case):
 
     assert decision.allowed is False
     assert decision.reason == ("proposal_path_mismatch")
+
+
+def test_proposal_count_mismatch_is_rejected(
+    snapshot_case,
+):
+    _, _, _, report = snapshot_case
+
+    report["proposed_file_count"] = 99
+
+    decision = check(snapshot_case)
+
+    assert decision.allowed is False
+    assert decision.reason == "proposal_count_mismatch"
+
+
+def test_malformed_drop_is_rejected_safely(
+    snapshot_case,
+):
+    _, _, _, report = snapshot_case
+
+    report["effective_proposed_drops"] = [{"unexpected": "object"}]
+
+    decision = check(snapshot_case)
+
+    assert decision.allowed is False
+    assert decision.reason == "invalid_proposed_drops"

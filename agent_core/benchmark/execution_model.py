@@ -76,6 +76,11 @@ class FullExecutionTaskRecord(BaseModel):
 
     context_revision: str | None = None
 
+    context_shadow_status: str | None = None
+    context_shadow_reason: str | None = None
+    context_shadow_bundle_sha256: str | None = None
+    context_shadow_message_sha256: str | None = None
+
     context_retrieval_mode: (
         Literal[
             "hybrid",

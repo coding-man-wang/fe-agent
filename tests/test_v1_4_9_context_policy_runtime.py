@@ -380,3 +380,47 @@ def test_off_mode_does_not_run_snapshot_gate(policy_case):
 
     assert result.decision.status == "baseline"
     assert len(result.bundle.code_context) == 6
+
+
+def test_off_skips_evidence_capture(
+    policy_case,
+    monkeypatch,
+):
+    def forbidden_capture(**kwargs):
+        raise AssertionError("Off mode 不应采集实验快照")
+
+    monkeypatch.setattr(
+        "agent_core.benchmark.context_policy_runtime." "capture_selection_evidence",
+        forbidden_capture,
+    )
+
+    result = consume(
+        policy_case,
+        config=ContextRolloutConfig(mode="off"),
+        report={},
+    )
+
+    assert result.decision.status == "baseline"
+    assert result.decision.reason == "policy_off"
+    assert len(result.bundle.code_context) == 6
+
+
+def test_shadow_no_change_is_not_fallback(
+    policy_case,
+):
+    report = {
+        **policy_case["report"],
+        "proposed_file_count": 6,
+        "graph_proposed_drops": [],
+        "rerank_proposed_drops": [],
+        "effective_proposed_drops": [],
+    }
+
+    result = consume(
+        policy_case,
+        report=report,
+    )
+
+    assert result.decision.status == "shadow"
+    assert result.decision.reason == "no_change"
+    assert len(result.bundle.code_context) == 6

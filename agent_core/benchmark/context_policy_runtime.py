@@ -298,6 +298,38 @@ class GuardedContextPolicyConsumer:
         required = set(required_context_paths or ())
         additional = set(additional_source_paths or ())
 
+        # OFF 是原有 Context 构建链路的兼容模式。
+        # 不执行 Shadow、Snapshot Gate 和实验策略审计。
+        if self.config.mode == "off":
+            bundle = build_context(original.model_copy(deep=True))
+
+            if bundle.task.task_id != task.task_id:
+                raise MissingMandatoryContextError("Context Task ID 不一致")
+
+            paths = _context_paths(bundle)
+            missing = required - paths
+
+            if missing:
+                raise MissingMandatoryContextError(
+                    "Baseline 缺少必要文件: " + ", ".join(sorted(missing))
+                )
+
+            actual_paths = tuple(item.relative_path for item in bundle.code_context)
+
+            return ContextConsumptionResult(
+                bundle=bundle,
+                decision=ContextPolicyDecision(
+                    task_id=task.task_id,
+                    mode="off",
+                    status="baseline",
+                    reason="policy_off",
+                    snapshot_gate_reason="not_checked",
+                    proposed_drops=(),
+                    context_files_before=actual_paths,
+                    context_files_after=actual_paths,
+                ),
+            )
+
         gate_reason = "not_checked"
         candidate = None
         candidate_reason = "policy_off"
@@ -410,8 +442,19 @@ class GuardedContextPolicyConsumer:
         )
 
         if optimized_bundle is None:
-            status = "fallback"
-            reason = candidate_reason
+            if (
+                self.config.mode == "shadow"
+                and gate_reason == "snapshot_valid"
+                and candidate_reason == "no_change"
+            ):
+                # 正常完成的 Shadow，
+                # 只是没有发现可以安全移除的文件。
+                status = "shadow"
+                reason = "no_change"
+            else:
+                status = "fallback"
+                reason = candidate_reason
+
             used_bundle = baseline_bundle
 
         elif active_authorized:

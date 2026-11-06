@@ -159,6 +159,20 @@ async def main():
 
         audit_written = case.case_id in audited_task_ids
 
+        actual_context_files = tuple(
+            item.relative_path for item in consumption.bundle.code_context
+        )
+
+        decision = consumption.decision
+
+        context_policy_valid = (
+            decision.mode == "shadow"
+            and decision.status == "shadow"
+            and decision.snapshot_gate_reason == "snapshot_valid"
+            and decision.context_files_before == decision.context_files_after
+            and actual_context_files == decision.context_files_before
+        )
+
         results.append(
             {
                 "case_id": case.case_id,
@@ -175,6 +189,7 @@ async def main():
                     and evidence_valid
                     and audit_written
                     and snapshot_decision.allowed
+                    and context_policy_valid
                 ),
                 "snapshot_gate": {
                     "allowed": snapshot_decision.allowed,
@@ -185,12 +200,14 @@ async def main():
                     "reason": consumption.decision.reason,
                     "files_before": list(consumption.decision.context_files_before),
                     "files_after": list(consumption.decision.context_files_after),
+                    "proposed_drops": list(consumption.decision.proposed_drops),
                 },
+                "context_policy_valid": context_policy_valid,
             }
         )
 
     output = {
-        "version": "v1.4.9-P2-A",
+        "version": "v1.4.9-P2-B",
         "mode": "shadow",
         "repository_revision": revision,
         "total_cases": len(results),

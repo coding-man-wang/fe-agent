@@ -120,6 +120,14 @@ class ShadowSnapshotGate:
         if len(drops) != len(set(drops)) or not set(drops).issubset(selected_paths):
             return deny("proposal_path_mismatch")
 
+        # Proposal 声明的输入、输出文件数量必须可信。
+        baseline_count = len(selection.selected_files)
+
+        if report.get("baseline_file_count") != baseline_count or report.get(
+            "proposed_file_count"
+        ) != baseline_count - len(drops):
+            return deny("proposal_count_mismatch")
+
         # 6. 重新读取磁盘文件。
         try:
             current = capture_selection_evidence(

@@ -5,6 +5,20 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+import os
+
+from agent_core.benchmark.full_execution_context_shadow import (
+    FullExecutionContextShadowObserver,
+)
+from agent_core.benchmark.selection_shadow_integration import (
+    ContextOptimizationShadowRunner,
+)
+from agent_core.benchmark.task_rerank_diagnostics import (
+    TaskRerankDiagnosticRunner,
+)
+from agent_core.codebase.openai_reranker import (
+    OpenAICompatibleReranker,
+)
 from agent_core.artifacts.store import JsonTaskArtifactStore
 from agent_core.benchmark.change_surface_evaluator import ChangeSurfaceEvaluator
 from agent_core.benchmark.full_execution import FullExecutionBenchmarkService
@@ -64,7 +78,54 @@ def _parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--context-shadow",
+        action="store_true",
+        help=(
+            "在 Full Execution 的 Coding Agent 消费前"
+            "执行一次只读 Context Shadow 观察"
+        ),
+    )
+
     return parser.parse_args()
+
+
+def create_full_execution_shadow_observer():
+    """
+    只构造 Rerank 诊断客户端。
+
+    Retrieval 仍由既有 FullExecutionBenchmarkService
+    负责，Shadow 不会再建立自己的 Selection Service。
+    """
+    required = (
+        "RERANK_MODEL_ID",
+        "RERANK_API_KEY",
+        "RERANK_BASE_URL",
+    )
+
+    missing = [key for key in required if not os.getenv(key)]
+
+    if missing:
+        raise RuntimeError("缺少 Shadow 配置: " + ", ".join(missing))
+
+    reranker = OpenAICompatibleReranker(
+        model=os.environ["RERANK_MODEL_ID"],
+        api_key=os.environ["RERANK_API_KEY"],
+        base_url=os.environ["RERANK_BASE_URL"],
+        request_timeout_seconds=60,
+    )
+
+    runner = ContextOptimizationShadowRunner(
+        rerank_runner=TaskRerankDiagnosticRunner(
+            reranker=reranker,
+            max_document_chars=6000,
+        )
+    )
+
+    return FullExecutionContextShadowObserver(
+        runner=runner,
+        timeout_seconds=90.0,
+    )
 
 
 def _repository_profile(*, baseline, benchmark_repository: Path) -> RepositoryProfile:
@@ -420,6 +481,9 @@ async def main():
     print("=== Full Execution Benchmark ===")
     context_selection_service = _build_context_selection_service(runner=runner)
 
+    context_shadow_observer = (
+        create_full_execution_shadow_observer() if args.context_shadow else None
+    )
     execution = await FullExecutionBenchmarkService(
         fe_agent_root=fe_agent_root,
         benchmark_repository=(benchmark_repository),
@@ -427,6 +491,7 @@ async def main():
         llm=llm,
         coordinator=coordinator,
         context_selection_service=(context_selection_service),
+        context_shadow_observer=context_shadow_observer,
     ).run(
         case=case,
         task_plan=baseline.task_plan,

@@ -114,6 +114,12 @@ class JsonlShadowAuditStore:
         "snapshot_gate_reason",
         "context_files_before",
         "context_files_after",
+        "observation_point",
+        "bundle_sha256_before",
+        "bundle_sha256_after",
+        "context_unchanged",
+        "bundle_source_matched",
+        "bundle_source_changed_paths",
     )
 
     EVIDENCE_FIELDS = (

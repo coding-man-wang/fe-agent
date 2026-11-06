@@ -2,3 +2,6 @@
 
 # Shadow benchmark audit output
 var/audit/
+
+# Generated canary reports
+var/canary/

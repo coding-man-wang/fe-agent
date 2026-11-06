@@ -5,7 +5,16 @@ import hashlib
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+import logging
 
+from agent_core.benchmark.full_execution_context_shadow import (
+    FullExecutionContextShadowObserver,
+)
+from agent_core.benchmark.shadow_audit import (
+    JsonlShadowAuditStore,
+)
+
+logger = logging.getLogger(__name__)
 from agent_core.artifacts.store import JsonTaskArtifactStore
 from agent_core.benchmark.acceptance import HiddenAcceptanceRunner
 from agent_core.benchmark.case_model import BenchmarkCase
@@ -237,6 +246,7 @@ class FullExecutionBenchmarkService:
         llm: LLM,
         coordinator: HarnessV1Coordinator,
         context_selection_service: TaskContextSelectionService,
+        context_shadow_observer: FullExecutionContextShadowObserver | None = None,
     ) -> None:
         self.fe_agent_root = Path(fe_agent_root).resolve(strict=True)
 
@@ -277,6 +287,8 @@ class FullExecutionBenchmarkService:
         self.store = FullExecutionRunStore(self.fe_agent_root)
 
         self.context_selection_service = context_selection_service
+
+        self.context_shadow_observer = context_shadow_observer
 
     def _create_run_scoped_coordinator(
         self,
@@ -328,6 +340,62 @@ class FullExecutionBenchmarkService:
             policy=(self.coordinator.policy),
             trace_store=(JsonlHarnessTraceStore(path=(harness_root / "trace.jsonl"))),
         )
+
+    async def _observe_context_shadow(
+        self,
+        *,
+        repository_root: Path,
+        repository_revision: str,
+        raw_requirement: str,
+        selection_result: TaskContextSelectionResult,
+        bundle: TaskContextBundle,
+    ) -> dict:
+        """
+        Best-effort Shadow Observation。
+
+        即使 Shadow 本身或 Audit 写入失败，
+        也不能改变正式 Coding Workflow。
+        """
+        if self.context_shadow_observer is None:
+            return {
+                "status": "off",
+                "applied": False,
+            }
+
+        try:
+            report = await self.context_shadow_observer.observe(
+                repository_root=repository_root,
+                repository_revision=repository_revision,
+                raw_requirement=raw_requirement,
+                selection_result=selection_result,
+                bundle=bundle,
+            )
+
+        except Exception as exc:
+            logger.exception("Full Execution Shadow Hook Failed")
+
+            report = {
+                "policy_version": "v1.4.9-P4-B-D1",
+                "event_type": "full_execution_context_shadow",
+                "mode": "shadow",
+                "task_id": bundle.task.task_id,
+                "repository_revision": repository_revision,
+                "status": "error",
+                "reason": ("shadow_hook_exception:" + type(exc).__name__),
+                "applied": False,
+            }
+
+        # 审计文件属于当前 Run，
+        # 不写入历史 Baseline Artifact Store。
+        try:
+            JsonlShadowAuditStore(path=(self.run_root / "context_shadow.jsonl")).append(
+                report
+            )
+
+        except Exception:
+            logger.exception("Full Execution Shadow Audit Failed")
+
+        return report
 
     async def run(
         self,
@@ -1074,15 +1142,65 @@ class FullExecutionBenchmarkService:
                         },
                     )
 
-                    # ==================================
-                    # Coding Analysis
-                    # ==================================
+                    # ======================================
+                    # v1.4.9-P4-B-D1
+                    # Full Execution Context Shadow
+                    #
+                    # 观察已经完成以下处理的最终 Bundle：
+                    # - Fresh Change Surface
+                    # - Role-aware Context
+                    # - Obligation Evidence Enrichment
+                    # - Verification Strategy（如存在）
+                    #
+                    # 不调用第二次 Retrieval。
+                    # 不替换 Bundle。
+                    # 不扩大 Write Permission。
+                    # ======================================
+
+                    if self.context_shadow_observer is not None:
+                        shadow_report = await self._observe_context_shadow(
+                            repository_root=analysis_root,
+                            repository_revision=current_sha,
+                            raw_requirement=case.requirement,
+                            selection_result=context_selection,
+                            bundle=bundle,
+                        )
+
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "context_shadow_status": (shadow_report.get("status")),
+                                "context_shadow_reason": (shadow_report.get("reason")),
+                                "context_shadow_bundle_sha256": (
+                                    shadow_report.get("bundle_sha256_before")
+                                ),
+                            },
+                        )
 
                     # ==================================
                     # Coding Analysis
                     # ==================================
 
                     messages = coding_agent.prepare_messages(bundle)
+
+                    if self.context_shadow_observer is not None:
+                        from agent_core.benchmark.selection_evidence_binding import (
+                            json_digest,
+                        )
+
+                        # 仅保存最终模型消息的摘要，
+                        # 不将源码、Prompt 写入审计日志。
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "context_shadow_message_sha256": json_digest(
+                                    {
+                                        "system_message": messages.system_message,
+                                        "user_message": messages.user_message,
+                                    }
+                                ),
+                            },
+                        )
 
                     analysis_messages = messages
 
