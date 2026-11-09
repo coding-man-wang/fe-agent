@@ -120,6 +120,8 @@ class JsonlShadowAuditStore:
         "context_unchanged",
         "bundle_source_matched",
         "bundle_source_changed_paths",
+        "bundle_source_sha256_before",
+        "bundle_source_sha256_after",
     )
 
     EVIDENCE_FIELDS = (

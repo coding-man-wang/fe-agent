@@ -65,6 +65,19 @@ def _context_source_hashes(
     return hashes
 
 
+def capture_final_context_source_digest(
+    *,
+    repository_root: str | Path,
+    bundle: TaskContextBundle,
+) -> str:
+    return json_digest(
+        _context_source_hashes(
+            repository_root=repository_root,
+            bundle=bundle,
+        )
+    )
+
+
 class FullExecutionContextShadowObserver:
     """
     v1.4.9-P4-B-D1
@@ -265,6 +278,8 @@ class FullExecutionContextShadowObserver:
                     "context_unchanged": bundle_matched,
                     "bundle_source_matched": (bundle_sources_matched),
                     "bundle_source_changed_paths": (changed_context_paths),
+                    "bundle_source_sha256_before": json_digest(context_sources_before),
+                    "bundle_source_sha256_after": json_digest(context_sources_after),
                 }
             )
 
