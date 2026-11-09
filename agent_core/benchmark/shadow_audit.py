@@ -122,6 +122,22 @@ class JsonlShadowAuditStore:
         "bundle_source_changed_paths",
         "bundle_source_sha256_before",
         "bundle_source_sha256_after",
+        "case_id",
+        "canary_sha256",
+        "baseline_files",
+        "candidate_files",
+        "removed_files",
+        "baseline_chars",
+        "candidate_chars",
+        "baseline_bundle_sha256",
+        "selection_sha256",
+        "source_sha256",
+        "snapshot_matched",
+        "preview_reason",
+        "trial_reason",
+        "audit_recorded",
+        "production_ready",
+        "active_execution_enabled",
     )
 
     EVIDENCE_FIELDS = (

@@ -80,6 +80,7 @@ class FullExecutionTaskRecord(BaseModel):
     context_shadow_reason: str | None = None
     context_shadow_bundle_sha256: str | None = None
     context_shadow_message_sha256: str | None = None
+    context_guarded_preview: dict[str, Any] | None = None
 
     context_retrieval_mode: (
         Literal[

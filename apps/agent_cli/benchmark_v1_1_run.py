@@ -11,6 +11,7 @@ import hashlib
 
 from agent_core.benchmark.case_loader import BenchmarkCaseLoader
 from agent_core.benchmark.full_execution_active_preflight import (
+    ActivePreflightDecision,
     evaluate_active_preflight,
 )
 from apps.agent_cli.benchmark_multi_task_v1_4_8 import (
@@ -104,6 +105,15 @@ def _parse_args():
     )
 
     parser.add_argument(
+        "--context-guarded-preview",
+        action="store_true",
+        help=(
+            "在真实 Full Execution 中校验 Guarded Context 候选；"
+            "Coding Agent 仍消费 Baseline，生产 Active 保持关闭"
+        ),
+    )
+
+    parser.add_argument(
         "--active-task-id",
         default=None,
         help="本次申请实验的 Task ID",
@@ -118,12 +128,12 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _run_active_preflight(
+def _checked_active_preflight(
     *,
     args,
     fe_agent_root: Path,
     benchmark_repository: Path,
-) -> None:
+) -> ActivePreflightDecision:
     """
     纯前置检查执行路径。
 
@@ -201,6 +211,21 @@ def _run_active_preflight(
 
     if result.status != "passed":
         raise SystemExit(2)
+
+    return result
+
+
+def _run_active_preflight(
+    *,
+    args,
+    fe_agent_root: Path,
+    benchmark_repository: Path,
+) -> None:
+    _checked_active_preflight(
+        args=args,
+        fe_agent_root=fe_agent_root,
+        benchmark_repository=benchmark_repository,
+    )
 
 
 def create_full_execution_shadow_observer():
@@ -515,6 +540,14 @@ async def main():
     fe_agent_root = Path(__file__).resolve().parents[2]
     benchmark_repository = Path(r"D:\project\fe-agent-benchmark-web")
     case_id = args.case_id
+    guarded_preview = getattr(args, "context_guarded_preview", False)
+    if guarded_preview and (
+        args.context_active_preflight or args.context_shadow or args.refresh_upstream
+    ):
+        raise SystemExit(
+            "--context-guarded-preview 不能与 --context-active-preflight / "
+            "--context-shadow / --refresh-upstream 同时使用"
+        )
 
     # ======================================
     # v1.4.9-P4-B-D2-A
@@ -530,8 +563,19 @@ async def main():
 
     # 防止普通 Full Execution 意外接受
     # Active 的授权参数却不执行准入检查。
-    if args.active_task_id is not None or args.approved_revision is not None:
-        raise SystemExit("Active 参数只能与 " "--context-active-preflight 一起使用")
+    context_guarded_preflight = None
+    if guarded_preview:
+        # 在模型、检索服务及 Worktree 初始化前执行既有 D2-A 门禁。
+        context_guarded_preflight = _checked_active_preflight(
+            args=args,
+            fe_agent_root=fe_agent_root,
+            benchmark_repository=benchmark_repository,
+        )
+    elif args.active_task_id is not None or args.approved_revision is not None:
+        raise SystemExit(
+            "Active 参数只能与 --context-active-preflight / "
+            "--context-guarded-preview 一起使用"
+        )
 
     dependency_preflight = NodeModulesWorkspaceProvisioner(
         dependency_source_root=benchmark_repository
@@ -561,6 +605,11 @@ async def main():
                 prepared_store.save(prepared)
 
     if prepared is None:
+        if guarded_preview:
+            raise SystemExit(
+                "Guarded Preview 需要既有 passed Prepared Execution Input；"
+                "请先完成普通 Benchmark 的上游准备"
+            )
         if not args.refresh_upstream:
             print(
                 "没有找到历史 passed Prepared Input；"
@@ -612,7 +661,9 @@ async def main():
     context_selection_service = _build_context_selection_service(runner=runner)
 
     context_shadow_observer = (
-        create_full_execution_shadow_observer() if args.context_shadow else None
+        create_full_execution_shadow_observer()
+        if args.context_shadow or guarded_preview
+        else None
     )
     execution = await FullExecutionBenchmarkService(
         fe_agent_root=fe_agent_root,
@@ -622,6 +673,7 @@ async def main():
         coordinator=coordinator,
         context_selection_service=(context_selection_service),
         context_shadow_observer=context_shadow_observer,
+        context_guarded_preflight=context_guarded_preflight,
     ).run(
         case=case,
         task_plan=baseline.task_plan,

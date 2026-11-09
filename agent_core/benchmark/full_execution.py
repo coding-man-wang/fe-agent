@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 import logging
+import subprocess
+
+from agent_core.benchmark.full_execution_active_preflight import ActivePreflightDecision
+from agent_core.benchmark.full_execution_guarded_preview import (
+    run_full_execution_guarded_preview,
+)
+from agent_core.benchmark.selection_evidence_binding import json_digest
 
 from agent_core.benchmark.full_execution_context_shadow import (
     FullExecutionContextShadowObserver,
@@ -157,6 +164,78 @@ class FullExecutionBenchmarkError(RuntimeError):
     pass
 
 
+def _read_clean_snapshot_revision(repository_root: Path) -> str:
+    """Read live HEAD and reject changes anywhere the final builders may read."""
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(repository_root), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+
+    revision = git("rev-parse", "HEAD")
+    if git("status", "--porcelain", "--untracked-files=all"):
+        raise FullExecutionBenchmarkError("Guarded Preview snapshot is dirty")
+    if git("rev-parse", "HEAD") != revision:
+        raise FullExecutionBenchmarkError("Guarded Preview revision changed")
+    return revision
+
+
+def _build_final_execution_context(
+    *,
+    coordinator,
+    repository_root,
+    requirement,
+    technical_spec,
+    repository,
+    index,
+    base_bundle,
+    selection,
+    execution_surface,
+    engineering_rules,
+    task_plan,
+    obligation_enricher,
+    strategy_resolver,
+):
+    """The single final build pipeline for the consumed baseline and trial."""
+    bundle = coordinator.build_resolved_context(
+        repository_root=repository_root,
+        requirement=requirement,
+        technical_spec=technical_spec,
+        repository=repository,
+        index=index,
+        bundle=base_bundle,
+        selection=selection,
+        surface=execution_surface,
+        engineering_rules=engineering_rules,
+        task_plan=task_plan,
+    )
+    enrichment = obligation_enricher.enrich(
+        repository_root=repository_root,
+        bundle=bundle,
+    )
+    bundle = enrichment.bundle
+    strategy = None
+    if bundle.task.task_type == "test":
+        strategy = strategy_resolver.resolve(
+            repository_root=repository_root,
+            task=bundle.task,
+            repository=repository,
+            code_context=bundle.code_context,
+            execution_surface=execution_surface,
+            requirement_acceptance_criteria=requirement.acceptance_criteria,
+            technical_testing_strategy=technical_spec.testing_strategy,
+        )
+        bundle = bundle.model_copy(
+            deep=True,
+            update={"verification_strategy": strategy.model_dump(mode="json")},
+        )
+    return bundle, enrichment, strategy
+
+
 def _context_selection_diagnostics(
     context_selection: TaskContextSelectionResult,
 ) -> dict[str, Any]:
@@ -247,7 +326,10 @@ class FullExecutionBenchmarkService:
         coordinator: HarnessV1Coordinator,
         context_selection_service: TaskContextSelectionService,
         context_shadow_observer: FullExecutionContextShadowObserver | None = None,
+        context_guarded_preflight: ActivePreflightDecision | None = None,
     ) -> None:
+        if context_guarded_preflight is not None and context_shadow_observer is None:
+            raise ValueError("Guarded Preview requires a Shadow observer")
         self.fe_agent_root = Path(fe_agent_root).resolve(strict=True)
 
         self.benchmark_repository = Path(benchmark_repository).resolve(strict=True)
@@ -289,6 +371,7 @@ class FullExecutionBenchmarkService:
         self.context_selection_service = context_selection_service
 
         self.context_shadow_observer = context_shadow_observer
+        self.context_guarded_preflight = context_guarded_preflight
 
     def _create_run_scoped_coordinator(
         self,
@@ -411,6 +494,23 @@ class FullExecutionBenchmarkService:
             ResolvedChangeSurface,
         ],
     ) -> FullExecutionRunRecord:
+
+        preflight = self.context_guarded_preflight
+        if preflight is not None and not (
+            preflight.status == "passed"
+            and case.case_id == preflight.case_id == "CASE-006"
+            and preflight.task_id == "TASK-002"
+            and preflight.approved_revision
+            == preflight.current_revision
+            == case.base_commit_sha
+            and preflight.canary_sha256
+            and preflight.applied is False
+            and preflight.production_ready is False
+            and preflight.active_execution_enabled is False
+        ):
+            raise FullExecutionBenchmarkError(
+                "Guarded Preview preflight does not match this run"
+            )
 
         # ==================================
         # v1.3C
@@ -758,6 +858,12 @@ class FullExecutionBenchmarkService:
                         commit_sha=(current_sha),
                     )
 
+                    if self.context_guarded_preflight is not None:
+                        if _read_clean_snapshot_revision(analysis_root) != current_sha:
+                            raise FullExecutionBenchmarkError(
+                                "Guarded Preview snapshot revision mismatch"
+                            )
+
                     # ==================================
                     # Current Revision Context
                     #
@@ -981,137 +1087,41 @@ class FullExecutionBenchmarkService:
                     # 的代码上下文。
                     # ==================================
 
-                    bundle = run_coordinator.build_resolved_context(
-                        repository_root=(analysis_root),
-                        requirement=(requirement),
-                        technical_spec=(technical_spec),
-                        repository=(current_repository),
-                        index=(current_index),
-                        bundle=(base_bundle),
-                        selection=(selection),
-                        surface=(execution_surface),
-                        engineering_rules=(engineering_rules),
-                        task_plan=(execution_task_plan),
+                    def build_final_context(current_selection):
+                        return _build_final_execution_context(
+                            coordinator=run_coordinator,
+                            repository_root=analysis_root,
+                            requirement=requirement,
+                            technical_spec=technical_spec,
+                            repository=current_repository,
+                            index=current_index,
+                            base_bundle=base_bundle,
+                            selection=current_selection,
+                            execution_surface=execution_surface,
+                            engineering_rules=engineering_rules,
+                            task_plan=execution_task_plan,
+                            obligation_enricher=obligation_evidence_enricher,
+                            strategy_resolver=verification_strategy_resolver,
+                        )
+
+                    bundle, obligation_enrichment, verification_strategy = (
+                        build_final_context(selection)
                     )
-
-                    # ==================================
-                    # v1.3C
-                    #
-                    # Execution Obligation
-                    # Evidence Enrichment
-                    #
-                    # Compression 已经把多个
-                    # Logical code_change Tasks
-                    # 合成一个 Execution Unit。
-                    #
-                    # 此时仅合并 responsibility
-                    # 还不够：
-                    #
-                    # Coding Agent 还必须看到
-                    # 足以支撑这些 Responsibility
-                    # 的 Repository Evidence。
-                    #
-                    # 这里只扩展：
-                    #
-                    #     Read Context
-                    #
-                    # 不扩展：
-                    #
-                    #     Change Surface
-                    #     Execution Surface
-                    #     Write Permission
-                    # ==================================
-
-                    obligation_enrichment = obligation_evidence_enricher.enrich(
-                        repository_root=(analysis_root),
-                        bundle=bundle,
-                    )
-
-                    bundle = obligation_enrichment.bundle
-
-                    # ==================================
-                    # Context Observability
-                    #
-                    # selected_context_files
-                    # 应反映 Agent 最终真正看到的
-                    # Code Context，
-                    # 不只是最初 Retrieval Selection。
-                    # ==================================
-
                     task_record = task_record.model_copy(
                         deep=True,
                         update={
                             "selected_context_files": [
                                 item.relative_path for item in bundle.code_context
                             ],
-                            "obligation_evidence_files": (
-                                obligation_enrichment.added_files
-                            ),
-                            ("obligation_evidence_" "evicted_files"): (
-                                obligation_enrichment.evicted_files
+                            "obligation_evidence_files": obligation_enrichment.added_files,
+                            "obligation_evidence_evicted_files": obligation_enrichment.evicted_files,
+                            "verification_strategy": (
+                                verification_strategy.model_dump(mode="json")
+                                if verification_strategy is not None
+                                else None
                             ),
                         },
                     )
-
-                    # ==================================
-                    # Effective Engineering Policy
-                    #
-                    # Policy 决定：
-                    #
-                    #   How should this task be done?
-                    #
-                    # Change Surface 决定：
-                    #
-                    #   What may this task change?
-                    #
-                    # 两者严格分离。
-                    # ==================================
-
-                    # ==================================
-                    # v1.3D
-                    #
-                    # Verification Capability-aware
-                    # Test Layer Selection
-                    # ==================================
-
-                    verification_strategy: VerificationStrategyPlan | None = None
-
-                    if task.task_type == "test":
-                        verification_strategy = verification_strategy_resolver.resolve(
-                            repository_root=(analysis_root),
-                            task=task,
-                            repository=(current_repository),
-                            code_context=(bundle.code_context),
-                            execution_surface=(execution_surface),
-                            requirement_acceptance_criteria=(
-                                requirement.acceptance_criteria
-                            ),
-                            technical_testing_strategy=(
-                                technical_spec.testing_strategy
-                            ),
-                        )
-
-                        # Coding Agent 消费的是
-                        # TaskContextBundle，
-                        # 所以 Strategy 必须成为
-                        # Context Artifact。
-                        bundle = bundle.model_copy(
-                            deep=True,
-                            update={
-                                "verification_strategy": (
-                                    verification_strategy.model_dump(mode="json")
-                                )
-                            },
-                        )
-
-                        task_record = task_record.model_copy(
-                            deep=True,
-                            update={
-                                "verification_strategy": (
-                                    verification_strategy.model_dump(mode="json")
-                                )
-                            },
-                        )
 
                     effective_policy = policy_resolver.resolve(
                         task=task,
@@ -1157,7 +1167,42 @@ class FullExecutionBenchmarkService:
                     # 不扩大 Write Permission。
                     # ======================================
 
-                    if self.context_shadow_observer is not None:
+                    guarded_report = None
+                    if self.context_guarded_preflight is not None:
+
+                        def audit_preview(report):
+                            JsonlShadowAuditStore(
+                                path=self.run_root / "context_guarded_preview.jsonl"
+                            ).append(report)
+
+                        guarded_report = await run_full_execution_guarded_preview(
+                            repository_root=analysis_root,
+                            raw_requirement=case.requirement,
+                            selection_result=context_selection,
+                            final_baseline_bundle=bundle,
+                            execution_surface=execution_surface,
+                            obligation_evidence_files=obligation_enrichment.added_files,
+                            preflight=self.context_guarded_preflight,
+                            get_current_revision=lambda: _read_clean_snapshot_revision(
+                                analysis_root
+                            ),
+                            build_final_context=lambda current: build_final_context(
+                                current
+                            )[0],
+                            observer=self.context_shadow_observer,
+                            audit_sink=audit_preview,
+                        )
+                        task_record = task_record.model_copy(
+                            deep=True,
+                            update={
+                                "context_guarded_preview": guarded_report.to_dict()
+                            },
+                        )
+                        if guarded_report.status == "blocked":
+                            raise FullExecutionBenchmarkError(
+                                "Guarded Preview blocked: " + guarded_report.reason
+                            )
+                    elif self.context_shadow_observer is not None:
                         shadow_report = await self._observe_context_shadow(
                             repository_root=analysis_root,
                             repository_revision=current_sha,
@@ -1201,6 +1246,39 @@ class FullExecutionBenchmarkService:
                                 ),
                             },
                         )
+
+                    if guarded_report is not None:
+                        try:
+                            consumption_matches = (
+                                _read_clean_snapshot_revision(analysis_root)
+                                == current_sha
+                                and json_digest(bundle.model_dump(mode="json"))
+                                == guarded_report.baseline_bundle_sha256
+                            )
+                        except Exception:
+                            consumption_matches = False
+                        if not consumption_matches:
+                            blocked_report = {
+                                **guarded_report.to_dict(),
+                                "status": "blocked",
+                                "reason": "changed_before_model_consumption",
+                                "snapshot_matched": False,
+                                "audit_recorded": False,
+                            }
+                            try:
+                                audit_preview(
+                                    {**blocked_report, "audit_recorded": True}
+                                )
+                                blocked_report["audit_recorded"] = True
+                            except Exception:
+                                logger.exception("Guarded Preview blocked audit failed")
+                            task_record = task_record.model_copy(
+                                deep=True,
+                                update={"context_guarded_preview": blocked_report},
+                            )
+                            raise FullExecutionBenchmarkError(
+                                "Guarded Preview changed before model consumption"
+                            )
 
                     analysis_messages = messages
 
