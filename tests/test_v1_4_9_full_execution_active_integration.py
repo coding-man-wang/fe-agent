@@ -35,6 +35,7 @@ def make_case(trial_case):
         base_commit_sha=trial_case["selection_result"].repository_revision,
         requirement=trial_case["raw_requirement"],
         expectation=BenchmarkExpectation(
+            expected_files=["src/f1.ts"],
             expected_behaviors=["Preserve existing behavior"],
             verification_command_ids=["test:unit"],
         ),

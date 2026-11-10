@@ -249,6 +249,7 @@ async def test_run_identity_rejected_before_planning_storage_or_model(
         base_commit_sha=revision,
         requirement=trial_case["raw_requirement"],
         expectation=BenchmarkExpectation(
+            expected_files=["src/f1.ts"],
             expected_behaviors=["Preserve behavior"],
             verification_command_ids=["test:unit"],
         ),
@@ -404,6 +405,7 @@ async def test_real_service_loop_preserves_baseline_or_blocks_before_model(
         base_commit_sha=revision,
         requirement=trial_case["raw_requirement"],
         expectation=BenchmarkExpectation(
+            expected_files=["src/f1.ts"],
             expected_behaviors=["Preserve behavior"],
             verification_command_ids=["test:unit"],
         ),

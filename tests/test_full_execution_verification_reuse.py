@@ -52,7 +52,10 @@ def run_verifications(tmp_path, monkeypatch):
         )
 
     async def changed_files(**kwargs):
-        return []
+        # Git/Patch execution is outside this scheduling test. Supply matching
+        # change evidence for the schema-required oracle so the real evaluator
+        # can independently check that repeated verification is not a failure.
+        return ["src/verified.ts"]
 
     monkeypatch.setattr(execution, "VerificationExecutor", Executor)
     monkeypatch.setattr(
@@ -118,6 +121,7 @@ def run_verifications(tmp_path, monkeypatch):
                 base_commit_sha=revision,
                 requirement="Verify the existing code",
                 expectation=BenchmarkExpectation(
+                    expected_files=["src/verified.ts"],
                     expected_behaviors=["Checks pass"],
                     verification_command_ids=["frontend-lint"],
                 ),
