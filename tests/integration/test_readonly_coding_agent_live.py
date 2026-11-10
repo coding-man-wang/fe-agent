@@ -2,6 +2,13 @@ import os
 from pathlib import Path
 
 import pytest
+
+if os.getenv("FE_AGENT_RUN_LIVE_TESTS") != "1":
+    pytest.skip(
+        "Set FE_AGENT_RUN_LIVE_TESTS=1 to opt in to paid live model tests",
+        allow_module_level=True,
+    )
+
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
@@ -16,7 +23,6 @@ from tests.test_context_renderer import (
 )
 
 load_dotenv()
-print(11111, os.getenv("LLM_API_KEY"))
 
 
 @pytest.mark.asyncio

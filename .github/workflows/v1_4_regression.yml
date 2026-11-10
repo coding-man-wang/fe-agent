@@ -1,0 +1,31 @@
+name: v1.4 offline regression
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      FE_AGENT_RUN_LIVE_TESTS: "0"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install offline test dependencies
+        run: python -m pip install pytest pytest-asyncio pydantic openai python-dotenv tree-sitter==0.26.0 tree-sitter-typescript==0.23.2
+      - name: Run full regression without external models
+        run: python -m pytest -q --junitxml=test-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results.xml
