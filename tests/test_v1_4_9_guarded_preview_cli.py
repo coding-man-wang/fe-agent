@@ -229,7 +229,12 @@ def fake_prepared_runtime(monkeypatch, *, prepared_available=True):
 
         async def run(self, **kwargs):
             calls.append("run")
-            return SimpleNamespace(model_dump_json=lambda **_: "{}", run_id="preview-1")
+            return SimpleNamespace(
+                model_dump_json=lambda **_: "{}",
+                run_id="preview-1",
+                status="completed",
+                evaluation=SimpleNamespace(status="passed"),
+            )
 
     monkeypatch.setattr(cli, "FullExecutionBenchmarkService", Execution)
     return calls, captured, passed, observer

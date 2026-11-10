@@ -12,6 +12,9 @@ from agent_core.benchmark.full_execution_active_preflight import ActivePreflight
 from agent_core.benchmark.full_execution_guarded_preview import (
     run_full_execution_guarded_preview,
 )
+from agent_core.benchmark.full_execution_guarded_active import (
+    run_full_execution_guarded_active,
+)
 from agent_core.benchmark.selection_evidence_binding import json_digest
 
 from agent_core.benchmark.full_execution_context_shadow import (
@@ -327,7 +330,14 @@ class FullExecutionBenchmarkService:
         context_selection_service: TaskContextSelectionService,
         context_shadow_observer: FullExecutionContextShadowObserver | None = None,
         context_guarded_preflight: ActivePreflightDecision | None = None,
+        experimental_context_active: bool = False,
+        context_experiment_identity: dict[str, Any] | None = None,
+        model_usage_meter=None,
     ) -> None:
+        if type(experimental_context_active) is not bool:
+            raise ValueError("experimental_context_active must be a boolean")
+        if experimental_context_active and context_guarded_preflight is None:
+            raise ValueError("Experimental Active requires an explicit preflight")
         if context_guarded_preflight is not None and context_shadow_observer is None:
             raise ValueError("Guarded Preview requires a Shadow observer")
         self.fe_agent_root = Path(fe_agent_root).resolve(strict=True)
@@ -372,6 +382,33 @@ class FullExecutionBenchmarkService:
 
         self.context_shadow_observer = context_shadow_observer
         self.context_guarded_preflight = context_guarded_preflight
+        self.experimental_context_active = experimental_context_active
+        self.context_experiment_identity = dict(context_experiment_identity or {})
+        self.model_usage_meter = model_usage_meter
+        self.context_policy_mode = (
+            "active_experiment"
+            if experimental_context_active
+            else (
+                "preview"
+                if context_guarded_preflight is not None
+                else "shadow" if context_shadow_observer is not None else "baseline"
+            )
+        )
+
+    def _with_run_usage(self, record):
+        if self.model_usage_meter is None:
+            return record
+        return record.model_copy(
+            deep=True, update={"model_usage": self.model_usage_meter.snapshot()}
+        )
+
+    def _with_task_usage(self, record, start_index):
+        if self.model_usage_meter is None:
+            return record
+        return record.model_copy(
+            deep=True,
+            update={"model_usage": self.model_usage_meter.snapshot(start_index)},
+        )
 
     def _create_run_scoped_coordinator(
         self,
@@ -512,6 +549,26 @@ class FullExecutionBenchmarkService:
                 "Guarded Preview preflight does not match this run"
             )
 
+        if self.experimental_context_active:
+            identity = self.context_experiment_identity
+            required = (
+                "case_sha256",
+                "prepared_input_sha256",
+                "upstream_artifacts_sha256",
+                "model_config_sha256",
+                "canary_sha256",
+                "approved_revision",
+            )
+            if (
+                any(not identity.get(key) for key in required)
+                or identity["case_sha256"] != json_digest(case.model_dump(mode="json"))
+                or identity["approved_revision"] != case.base_commit_sha
+                or identity["canary_sha256"] != preflight.canary_sha256
+            ):
+                raise FullExecutionBenchmarkError(
+                    "Experimental Active identity does not match this run"
+                )
+
         # ==================================
         # v1.3C
         #
@@ -545,10 +602,12 @@ class FullExecutionBenchmarkService:
             baseline_run_id=(self.baseline_run_id),
             case_id=case.case_id,
             base_commit_sha=(case.base_commit_sha),
+            context_policy_mode=self.context_policy_mode,
+            context_experiment_identity=self.context_experiment_identity,
             execution_plan_compression=(compression.summary),
         )
 
-        self.store.save(record)
+        self.store.save(self._with_run_usage(record))
 
         run_coordinator = self._create_run_scoped_coordinator()
 
@@ -631,6 +690,11 @@ class FullExecutionBenchmarkService:
 
         try:
             for task in topological_sort_tasks(execution_task_plan):
+                task_usage_start = (
+                    self.model_usage_meter.mark()
+                    if self.model_usage_meter is not None
+                    else 0
+                )
                 # ==================================
                 # Investigation
                 # ==================================
@@ -649,7 +713,7 @@ class FullExecutionBenchmarkService:
                         update={"tasks": (task_records)},
                     )
 
-                    self.store.save(record)
+                    self.store.save(self._with_run_usage(record))
 
                     continue
 
@@ -683,18 +747,22 @@ class FullExecutionBenchmarkService:
                             coalesced_task_ids=(
                                 compression.coalesced_task_ids_for_leader(task.task_id)
                             ),
-                            status="failed",
+                            status="skipped_redundant_verification",
                             base_commit_sha=(current_sha),
+                            context_revision=current_sha,
+                            planned_verification=final_plan,
                         )
 
-                        task_records.append(task_record)
+                        task_records.append(
+                            self._with_task_usage(task_record, task_usage_start)
+                        )
 
                         record = record.model_copy(
                             deep=True,
                             update={"tasks": task_records},
                         )
 
-                        self.store.save(record)
+                        self.store.save(self._with_run_usage(record))
 
                         continue
 
@@ -758,21 +826,23 @@ class FullExecutionBenchmarkService:
                         ),
                     )
 
-                    task_records.append(task_record)
+                    task_records.append(
+                        self._with_task_usage(task_record, task_usage_start)
+                    )
 
                     record = record.model_copy(
                         deep=True,
                         update={"tasks": (task_records)},
                     )
 
-                    self.store.save(record)
+                    self.store.save(self._with_run_usage(record))
 
                     if result.status != "passed":
                         raise (
                             FullExecutionBenchmarkError("Final Verification " "failed")
                         )
 
-                    self.store.save(record)
+                    self.store.save(self._with_run_usage(record))
 
                     if result.status != "passed":
                         raise (
@@ -981,14 +1051,16 @@ class FullExecutionBenchmarkService:
                             },
                         )
 
-                        task_records.append(task_record)
+                        task_records.append(
+                            self._with_task_usage(task_record, task_usage_start)
+                        )
 
                         record = record.model_copy(
                             deep=True,
                             update={"tasks": (task_records)},
                         )
 
-                        self.store.save(record)
+                        self.store.save(self._with_run_usage(record))
 
                         continue
 
@@ -1067,14 +1139,16 @@ class FullExecutionBenchmarkService:
                             },
                         )
 
-                        task_records.append(task_record)
+                        task_records.append(
+                            self._with_task_usage(task_record, task_usage_start)
+                        )
 
                         record = record.model_copy(
                             deep=True,
                             update={"tasks": (task_records)},
                         )
 
-                        self.store.save(record)
+                        self.store.save(self._with_run_usage(record))
 
                         continue
 
@@ -1163,19 +1237,25 @@ class FullExecutionBenchmarkService:
                     # - Verification Strategy（如存在）
                     #
                     # 不调用第二次 Retrieval。
-                    # 不替换 Bundle。
+                    # Preview 保留 Baseline；显式实验 Active 仅释放已校验候选。
                     # 不扩大 Write Permission。
                     # ======================================
 
                     guarded_report = None
+                    guarded_result = None
+                    guarded_field = (
+                        "context_guarded_active"
+                        if self.experimental_context_active
+                        else "context_guarded_preview"
+                    )
                     if self.context_guarded_preflight is not None:
 
                         def audit_preview(report):
                             JsonlShadowAuditStore(
-                                path=self.run_root / "context_guarded_preview.jsonl"
+                                path=self.run_root / (guarded_field + ".jsonl")
                             ).append(report)
 
-                        guarded_report = await run_full_execution_guarded_preview(
+                        guarded_args = dict(
                             repository_root=analysis_root,
                             raw_requirement=case.requirement,
                             selection_result=context_selection,
@@ -1192,15 +1272,38 @@ class FullExecutionBenchmarkService:
                             observer=self.context_shadow_observer,
                             audit_sink=audit_preview,
                         )
+                        if self.experimental_context_active:
+                            guarded_result = await run_full_execution_guarded_active(
+                                **guarded_args,
+                                experimental_active_enabled=True,
+                            )
+                            guarded_report = guarded_result.report
+                        else:
+                            guarded_report = await run_full_execution_guarded_preview(
+                                **guarded_args
+                            )
                         task_record = task_record.model_copy(
                             deep=True,
-                            update={
-                                "context_guarded_preview": guarded_report.to_dict()
-                            },
+                            update={guarded_field: guarded_report.to_dict()},
                         )
                         if guarded_report.status == "blocked":
                             raise FullExecutionBenchmarkError(
                                 "Guarded Preview blocked: " + guarded_report.reason
+                            )
+                        if guarded_result is not None:
+                            if guarded_result.bundle is None:
+                                raise FullExecutionBenchmarkError(
+                                    "Guarded Active did not release a safe context"
+                                )
+                            bundle = guarded_result.bundle
+                            task_record = task_record.model_copy(
+                                deep=True,
+                                update={
+                                    "selected_context_files": [
+                                        item.relative_path
+                                        for item in bundle.code_context
+                                    ]
+                                },
                             )
                     elif self.context_shadow_observer is not None:
                         shadow_report = await self._observe_context_shadow(
@@ -1229,10 +1332,6 @@ class FullExecutionBenchmarkService:
                     messages = coding_agent.prepare_messages(bundle)
 
                     if self.context_shadow_observer is not None:
-                        from agent_core.benchmark.selection_evidence_binding import (
-                            json_digest,
-                        )
-
                         # 仅保存最终模型消息的摘要，
                         # 不将源码、Prompt 写入审计日志。
                         task_record = task_record.model_copy(
@@ -1247,13 +1346,22 @@ class FullExecutionBenchmarkService:
                             },
                         )
 
-                    if guarded_report is not None:
+                    def assert_context_consumable():
+                        nonlocal task_record
+                        if guarded_report is None:
+                            return
                         try:
+                            if guarded_result is not None:
+                                guarded_result.assert_fresh()
+                            expected_digest = (
+                                getattr(guarded_report, "consumed_bundle_sha256", "")
+                                or guarded_report.baseline_bundle_sha256
+                            )
                             consumption_matches = (
                                 _read_clean_snapshot_revision(analysis_root)
                                 == current_sha
                                 and json_digest(bundle.model_dump(mode="json"))
-                                == guarded_report.baseline_bundle_sha256
+                                == expected_digest
                             )
                         except Exception:
                             consumption_matches = False
@@ -1264,6 +1372,8 @@ class FullExecutionBenchmarkService:
                                 "reason": "changed_before_model_consumption",
                                 "snapshot_matched": False,
                                 "audit_recorded": False,
+                                "applied": False,
+                                "active_execution_enabled": False,
                             }
                             try:
                                 audit_preview(
@@ -1271,14 +1381,16 @@ class FullExecutionBenchmarkService:
                                 )
                                 blocked_report["audit_recorded"] = True
                             except Exception:
-                                logger.exception("Guarded Preview blocked audit failed")
+                                logger.exception("Guarded context blocked audit failed")
                             task_record = task_record.model_copy(
                                 deep=True,
-                                update={"context_guarded_preview": blocked_report},
+                                update={guarded_field: blocked_report},
                             )
                             raise FullExecutionBenchmarkError(
-                                "Guarded Preview changed before model consumption"
+                                "Guarded context changed before model consumption"
                             )
+
+                    assert_context_consumable()
 
                     analysis_messages = messages
 
@@ -1328,6 +1440,7 @@ class FullExecutionBenchmarkService:
                             )
                         )
 
+                        assert_context_consumable()
                         analysis = await coding_agent.analyze_prepared(
                             bundle=bundle,
                             messages=(analysis_messages),
@@ -1380,6 +1493,7 @@ class FullExecutionBenchmarkService:
                             )
                         )
 
+                        assert_context_consumable()
                         analysis = await coding_agent.review_execution_obligations(
                             bundle=bundle,
                             messages=(obligation_review_messages),
@@ -1461,14 +1575,16 @@ class FullExecutionBenchmarkService:
                             },
                         )
 
-                        task_records.append(task_record)
+                        task_records.append(
+                            self._with_task_usage(task_record, task_usage_start)
+                        )
 
                         record = record.model_copy(
                             deep=True,
                             update={"tasks": (task_records)},
                         )
 
-                        self.store.save(record)
+                        self.store.save(self._with_run_usage(record))
 
                         continue
 
@@ -1516,6 +1632,7 @@ class FullExecutionBenchmarkService:
                     # ==================================
                     # Patch Proposal
                     # ==================================
+                    assert_context_consumable()
                     preparation = ExecutionPreparer(
                         repository_root=(analysis_root),
                         artifact_store=(analysis_store),
@@ -1530,6 +1647,7 @@ class FullExecutionBenchmarkService:
                     )
 
                     try:
+                        assert_context_consumable()
                         strategy_generation = await VerificationStrategyPatchGenerator(
                             repository_root=(analysis_root),
                             model=text_model,
@@ -1600,14 +1718,16 @@ class FullExecutionBenchmarkService:
                             },
                         )
 
-                        task_records.append(task_record)
+                        task_records.append(
+                            self._with_task_usage(task_record, task_usage_start)
+                        )
 
                         record = record.model_copy(
                             deep=True,
                             update={"tasks": (task_records)},
                         )
 
-                        self.store.save(record)
+                        self.store.save(self._with_run_usage(record))
 
                         continue
 
@@ -1966,6 +2086,7 @@ class FullExecutionBenchmarkService:
                                 # 当成新的 baseline。
                                 # ==================================
 
+                                assert_context_consumable()
                                 repair_result = (
                                     await verification_repair_service.repair(
                                         proposal=(active_proposal),
@@ -2486,14 +2607,16 @@ class FullExecutionBenchmarkService:
                         },
                     )
 
-                    task_records.append(task_record)
+                    task_records.append(
+                        self._with_task_usage(task_record, task_usage_start)
+                    )
 
                     record = record.model_copy(
                         deep=True,
                         update={"tasks": (task_records)},
                     )
 
-                    self.store.save(record)
+                    self.store.save(self._with_run_usage(record))
 
                     raise
 
@@ -2504,14 +2627,16 @@ class FullExecutionBenchmarkService:
                             allow_missing=True,
                         )
 
-                task_records.append(task_record)
+                task_records.append(
+                    self._with_task_usage(task_record, task_usage_start)
+                )
 
                 record = record.model_copy(
                     deep=True,
                     update={"tasks": (task_records)},
                 )
 
-                self.store.save(record)
+                self.store.save(self._with_run_usage(record))
 
             # ==================================
             # Hidden Acceptance
@@ -2559,6 +2684,7 @@ class FullExecutionBenchmarkService:
                 },
             )
 
+            completed = self._with_run_usage(completed)
             self.store.save(completed)
 
             return completed
@@ -2576,6 +2702,7 @@ class FullExecutionBenchmarkService:
                 },
             )
 
+            failed = self._with_run_usage(failed)
             self.store.save(failed)
 
             return failed

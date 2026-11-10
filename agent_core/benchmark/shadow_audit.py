@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from uuid import uuid4
@@ -138,6 +139,11 @@ class JsonlShadowAuditStore:
         "audit_recorded",
         "production_ready",
         "active_execution_enabled",
+        "consumed_bundle_sha256",
+        "mandatory_context_complete",
+        "retained_symbol_evidence",
+        "metadata_unchanged",
+        "scope_unchanged",
     )
 
     EVIDENCE_FIELDS = (
@@ -192,3 +198,5 @@ class JsonlShadowAuditStore:
             encoding="utf-8",
         ) as stream:
             stream.write(line + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())

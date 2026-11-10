@@ -81,6 +81,8 @@ class FullExecutionTaskRecord(BaseModel):
     context_shadow_bundle_sha256: str | None = None
     context_shadow_message_sha256: str | None = None
     context_guarded_preview: dict[str, Any] | None = None
+    context_guarded_active: dict[str, Any] | None = None
+    model_usage: dict[str, Any] | None = None
 
     context_retrieval_mode: (
         Literal[
@@ -224,6 +226,11 @@ class FullExecutionRunRecord(BaseModel):
     baseline_run_id: str
     case_id: str
     base_commit_sha: str
+    context_policy_mode: Literal[
+        "baseline", "shadow", "preview", "active_experiment"
+    ] = "baseline"
+    context_experiment_identity: dict[str, Any] = Field(default_factory=dict)
+    model_usage: dict[str, Any] | None = None
     execution_plan_compression: ExecutionPlanCompressionSummary | None = None
     final_commit_sha: str | None = None
     final_workspace_root: str | None = None

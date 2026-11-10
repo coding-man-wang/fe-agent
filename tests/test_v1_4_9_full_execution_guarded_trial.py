@@ -71,9 +71,9 @@ def trial_case(tmp_path):
         )
 
     selection = HybridRelevantFileSelection(
-        candidate_count=6,
-        eligible_count=6,
-        selected_count=6,
+        candidate_count=7,
+        eligible_count=7,
+        selected_count=7,
         total_selected_bytes=sum(item.size_bytes for item in selected),
         selected_files=selected,
     )

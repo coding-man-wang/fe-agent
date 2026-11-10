@@ -19,3 +19,7 @@ class ChatResponse(BaseModel):
     content: str
     tool_calls: list[ToolCall] = Field(default_factory=list)
     model: str | None = None
+    # Provider-reported counts only. None means unavailable, never estimated.
+    prompt_tokens: int | None = Field(default=None, ge=0, strict=True)
+    completion_tokens: int | None = Field(default=None, ge=0, strict=True)
+    total_tokens: int | None = Field(default=None, ge=0, strict=True)

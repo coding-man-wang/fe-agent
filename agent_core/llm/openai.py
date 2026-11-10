@@ -20,6 +20,11 @@ from agent_core.llm.model import (
 from .base import LLM
 
 
+def _reported_tokens(usage, name: str) -> int | None:
+    value = getattr(usage, name, None)
+    return value if type(value) is int and value >= 0 else None
+
+
 class OpenAILLM(LLM):
 
     def __init__(
@@ -85,10 +90,14 @@ class OpenAILLM(LLM):
                         )
                     )
 
+            usage = getattr(response, "usage", None)
             return ChatResponse(
                 content=response.output_text,
                 tool_calls=tool_calls,
-                model=self.model,
+                model=getattr(response, "model", None) or self.model,
+                prompt_tokens=_reported_tokens(usage, "input_tokens"),
+                completion_tokens=_reported_tokens(usage, "output_tokens"),
+                total_tokens=_reported_tokens(usage, "total_tokens"),
             )
 
         except APITimeoutError as exc:
