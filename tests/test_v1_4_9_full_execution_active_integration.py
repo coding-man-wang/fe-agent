@@ -224,7 +224,9 @@ async def test_service_consumes_only_authorized_fresh_candidate(
     )
 
     async def resolve_surface(**kwargs):
-        return trial_case["execution_surface"].model_copy(deep=True)
+        return trial_case["execution_surface"].model_copy(
+            deep=True, update={"execution_disposition": "change_required"}
+        )
 
     monkeypatch.setattr(coordinator, "resolve_change_surface", resolve_surface)
     monkeypatch.setattr(execution, "CommittedSnapshotWorktreeManager", Snapshot)
@@ -305,7 +307,9 @@ async def test_service_consumes_only_authorized_fresh_candidate(
     task_record = record.tasks[0]
     report = task_record.context_guarded_active
     if mode in {"source_changed", "render_mutation", "review_source_changed"}:
-        assert calls["model"] == (1 if mode == "review_source_changed" else 0)
+        assert calls["model"] == (
+            1 if mode == "review_source_changed" else 0
+        ), record.error
         assert calls["review"] == 0
         assert report["status"] == "blocked"
         assert report["applied"] is False
@@ -322,7 +326,7 @@ async def test_service_consumes_only_authorized_fresh_candidate(
             assert report["reason"] == "changed_before_model_consumption"
         return
 
-    assert calls["model"] == 1
+    assert calls["model"] == 1, record.error
     assert "MODEL_BOUNDARY_REACHED" in record.error
     paths = [item.relative_path for item in consumed[0].code_context]
     assert task_record.selected_context_files == paths

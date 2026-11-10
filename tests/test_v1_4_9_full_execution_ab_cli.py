@@ -110,6 +110,22 @@ async def test_failed_baseline_never_starts_active(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_baseline_initialization_failure_keeps_failed_report(monkeypatch):
+    state = setup_ab(monkeypatch)
+
+    async def unavailable(**kwargs):
+        state.arms.append(kwargs)
+        raise RuntimeError("cannot start baseline")
+
+    monkeypatch.setattr(cli, "_execute_prepared_run", unavailable)
+    with pytest.raises(SystemExit):
+        await cli.main()
+    assert [arm["mode"] for arm in state.arms] == ["baseline"]
+    assert state.reports[-1]["reason"] == "baseline_execution_unavailable"
+    assert not state.comparisons
+
+
+@pytest.mark.asyncio
 async def test_changed_frozen_inputs_stop_before_active(monkeypatch):
     state = setup_ab(monkeypatch)
     values = iter([state.identity, {**state.identity, "canary_sha256": "c" * 64}])

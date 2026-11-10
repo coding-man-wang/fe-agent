@@ -828,10 +828,25 @@ async def main():
     )
     print("=== Full Execution Benchmark ===")
     if context_ab:
-        active_observer = create_full_execution_shadow_observer()
-        baseline_execution = await _execute_prepared_run(
-            **common, mode="baseline", identity=identity
-        )
+        try:
+            active_observer = create_full_execution_shadow_observer()
+            baseline_execution = await _execute_prepared_run(
+                **common, mode="baseline", identity=identity
+            )
+        except Exception as exc:
+            _write_ab_report(
+                fe_agent_root,
+                {
+                    "version": "v1.4.9-final",
+                    "status": "failed",
+                    "reason": "baseline_execution_unavailable",
+                    "error_type": type(exc).__name__,
+                    "baseline_run_id": None,
+                    "active_run_id": None,
+                    "production_ready": False,
+                },
+            )
+            raise SystemExit(2) from exc
         if (
             baseline_execution.status != "completed"
             or baseline_execution.evaluation is None
