@@ -4,6 +4,12 @@ import sys
 import pytest
 
 from apps.agent_cli import benchmark_v1_1_run as cli
+from agent_core.benchmark.execution_model import (
+    FullExecutionRunRecord,
+    FullExecutionTaskRecord,
+    FullExecutionEvaluation,
+)
+from agent_core.coding.verification_model import VerificationCheck
 from test_v1_4_9_guarded_preview_cli import args, fake_prepared_runtime
 
 
@@ -11,6 +17,70 @@ def test_active_and_ab_require_explicit_opt_in(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["benchmark"])
     parsed = cli._parse_args()
     assert parsed.context_guarded_active is parsed.context_ab is False
+
+
+def test_baseline_failure_diagnostics_identify_task_and_e2e_timeout():
+    record = FullExecutionRunRecord(
+        run_id="failed-baseline",
+        baseline_run_id="prepared",
+        case_id="CASE-006",
+        base_commit_sha="a" * 40,
+        status="failed",
+        error="WorkspaceExecutionError: Verification 未成功，不能完成 Task",
+        tasks=[
+            FullExecutionTaskRecord(
+                task_id="TASK-002", task_type="code_change", status="completed"
+            ),
+            FullExecutionTaskRecord(
+                task_id="TASK-005",
+                task_type="test",
+                status="failed",
+                error="E2E verification failed",
+                verification_checks=[
+                    VerificationCheck(
+                        name="lint", status="passed", command_id="frontend-lint"
+                    ),
+                    VerificationCheck(
+                        name="e2e",
+                        status="failed",
+                        command_id="frontend-e2e",
+                        details="page.waitForResponse: Test timeout of 30000ms exceeded",
+                    ),
+                ],
+            ),
+        ],
+        model_usage={"usage_complete": False, "failed_calls": 1},
+    )
+    details = cli._execution_failure_details(record)
+    assert details["run_status"] == "failed"
+    assert details["run_error"] == record.error
+    assert [task["task_id"] for task in details["failed_tasks"]] == ["TASK-005"]
+    assert details["failed_tasks"][0]["failed_checks"] == [
+        {
+            "command_id": "frontend-e2e",
+            "name": "e2e",
+            "details": "page.waitForResponse: Test timeout of 30000ms exceeded",
+        }
+    ]
+    assert details["usage_complete"] is False
+    assert details["failed_model_calls"] == 1
+
+
+def test_completed_run_with_failed_evaluation_keeps_oracle_failure_reason():
+    record = FullExecutionRunRecord(
+        run_id="evaluated-baseline",
+        baseline_run_id="prepared",
+        case_id="CASE-006",
+        base_commit_sha="a" * 40,
+        status="completed",
+        evaluation=FullExecutionEvaluation(
+            status="failed", failure_reasons=["Unexpected change: forbidden.ts"]
+        ),
+    )
+    details = cli._execution_failure_details(record)
+    assert details["failed_tasks"] == []
+    assert details["evaluation_status"] == "failed"
+    assert details["evaluation_failure_reasons"] == ["Unexpected change: forbidden.ts"]
 
 
 @pytest.mark.asyncio
@@ -106,6 +176,8 @@ async def test_failed_baseline_never_starts_active(monkeypatch):
         await cli.main()
     assert [arm["mode"] for arm in state.arms] == ["baseline"]
     assert state.reports[-1]["reason"] == "baseline_failed"
+    assert state.reports[-1]["baseline_failure"]["evaluation_status"] == "failed"
+    assert state.reports[-1]["baseline_record"].endswith("baseline.json")
     assert not state.comparisons
 
 

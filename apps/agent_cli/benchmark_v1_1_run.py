@@ -669,6 +669,51 @@ async def _execute_prepared_run(
     )
 
 
+def _execution_failure_details(record):
+    """Expose the failing gate without requiring another paid model run."""
+
+    def excerpt(value):
+        if not isinstance(value, str):
+            return value
+        return (
+            value
+            if len(value) <= 6000
+            else value[:6000] + "\n[truncated; see run record]"
+        )
+
+    evaluation = getattr(record, "evaluation", None)
+    usage = getattr(record, "model_usage", None) or {}
+    return {
+        "run_status": record.status,
+        "run_error": excerpt(getattr(record, "error", None)),
+        "failed_tasks": [
+            {
+                "task_id": task.task_id,
+                "task_type": task.task_type,
+                "error": excerpt(task.error),
+                "failed_checks": [
+                    {
+                        "command_id": check.command_id,
+                        "name": check.name,
+                        "details": excerpt(check.details),
+                    }
+                    for check in task.verification_checks
+                    if check.status == "failed"
+                ],
+            }
+            for task in getattr(record, "tasks", [])
+            if task.status == "failed"
+        ],
+        "evaluation_status": getattr(evaluation, "status", None),
+        "evaluation_failure_reasons": list(getattr(evaluation, "failure_reasons", [])),
+        "hidden_acceptance_status": getattr(
+            getattr(record, "hidden_acceptance", None), "status", None
+        ),
+        "usage_complete": usage.get("usage_complete", False),
+        "failed_model_calls": usage.get("failed_calls"),
+    }
+
+
 def _write_ab_report(fe_agent_root, report):
     directory = fe_agent_root / ".fe-agent" / "benchmark" / "full_execution" / "ab"
     directory.mkdir(parents=True, exist_ok=True)
@@ -859,6 +904,15 @@ async def main():
                     "status": "failed",
                     "reason": "baseline_failed",
                     "baseline_run_id": baseline_execution.run_id,
+                    "baseline_record": str(
+                        fe_agent_root
+                        / ".fe-agent"
+                        / "benchmark"
+                        / "full_execution"
+                        / "runs"
+                        / (baseline_execution.run_id + ".json")
+                    ),
+                    "baseline_failure": _execution_failure_details(baseline_execution),
                     "active_run_id": None,
                     "production_ready": False,
                 },

@@ -1,10 +1,15 @@
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from agent_core.benchmark.verification_strategy import (
     VerificationStrategyGuard,
     VerificationStrategyResolver,
+    VerificationStrategyPatchGenerator,
+    VerificationStrategyError,
 )
+from agent_core.policies.model import EffectivePolicy
 from agent_core.change_surface.model import (
     ResolvedChangeSurface,
 )
@@ -367,3 +372,299 @@ def test_explicit_remote_e2e_enables_network_interception(
     assert "e2e_remote_network_interception" in strategy.allowed_strategies
 
     assert "e2e_remote_network_interception" not in strategy.forbidden_strategies
+
+
+def mixed_strategy(tmp_path, *, code_context=(), remote=False):
+    repository = make_repository(tmp_path)
+    if remote:
+        repository = repository.model_copy(
+            update={
+                "scripts": {
+                    "test": "vitest run",
+                    "test:e2e": "cross-env VITE_API_MODE=remote playwright test",
+                }
+            }
+        )
+    return VerificationStrategyResolver().resolve(
+        repository_root=tmp_path,
+        task=make_task(title="用户列表单元测试和端到端验证"),
+        repository=repository,
+        code_context=code_context,
+        execution_surface=make_e2e_surface().model_copy(
+            update={
+                "tests": ["tests/unit/usersStore.test.ts", "tests/e2e/users.spec.ts"],
+                "create_files": [],
+            }
+        ),
+        technical_testing_strategy=[
+            "单元测试验证切换 pageSize 时 page 被重置为 1，并调用现有列表加载方法。",
+            "组件测试验证选择 20 或 10 后控件值与查询模型 pageSize 保持一致。",
+            "Playwright 端到端测试覆盖从默认 10 条切换为 20 条、再切回 10 条的完整流程。",
+        ],
+    )
+
+
+def test_mixed_unknown_retains_both_layers_and_does_not_invent_runtime(tmp_path):
+    strategy = mixed_strategy(tmp_path)
+    assert strategy.selected_layer == "mixed"
+    assert strategy.runtime_path == "unknown"
+    assert strategy.remote_endpoint_hints == []
+    assert (
+        strategy.capability("browser_feature_network_interception").status == "unproven"
+    )
+    assert "unit_module_mock" in strategy.allowed_strategies
+    assert "e2e_public_ui_observation" in strategy.allowed_strategies
+    assert "e2e_remote_network_interception" in strategy.forbidden_strategies
+    proofs = [
+        proof for proof in strategy.proof_routes if proof.source == "technical_spec"
+    ]
+    assert [proof.preferred_layer for proof in proofs] == ["unit", "unit", "e2e"]
+    assert all(proof.routing_action == "required_here" for proof in proofs)
+    rules = {rule.rule_id: rule.description for rule in strategy.to_policy_rules()}
+    assert "TEST-MIXED-LAYER-001" in rules
+    assert "(unit) 单元测试" in rules["TEST-PROOF-REQUIRED-001"]
+    assert "(e2e) Playwright" in rules["TEST-PROOF-REQUIRED-001"]
+    assert "分页状态" in rules["TEST-E2E-NETWORK-001"]
+    assert "module mock" in rules["TEST-E2E-NETWORK-001"]
+
+
+@pytest.mark.parametrize(
+    "relative_path", ["tests/e2e/users.spec.ts", "tests/helpers/users.ts"]
+)
+def test_mixed_unknown_rejects_actual_page_size_http_wait_without_endpoint_hints(
+    tmp_path, relative_path
+):
+    strategy = mixed_strategy(tmp_path)
+    # Minimal regression from run 35d937... TASK-005: the Browser runtime was
+    # not proven remote, but a mixed task generated this impossible HTTP wait.
+    proposal = make_proposal(
+        relative_path=relative_path,
+        content="""
+import { expect, test, type Page } from '@playwright/test'
+async function changePageSize(page: Page, value: '10' | '20') {
+  const responsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname.endsWith('/users') &&
+      url.searchParams.get('page') === '1' &&
+      url.searchParams.get('pageSize') === value
+  })
+  await page.getByLabel('Page size').selectOption(value)
+  return responsePromise
+}
+""",
+    )
+    decision = VerificationStrategyGuard().evaluate(
+        strategy=strategy, proposal=proposal
+    )
+    assert not decision.allowed
+    assert [violation.code for violation in decision.violations] == [
+        "E2E_WAIT_FOR_RESPONSE"
+    ]
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_mixed_network_capability_requires_proven_remote_runtime(tmp_path, remote):
+    strategy = mixed_strategy(tmp_path, code_context=make_code_context(), remote=remote)
+    assert strategy.runtime_path == ("remote_http" if remote else "local_mock")
+    assert strategy.capability("browser_feature_network_interception").status == (
+        "available" if remote else "unavailable"
+    )
+    proposal = make_proposal(
+        relative_path="tests/e2e/users.spec.ts",
+        content="""
+import { test } from '@playwright/test'
+test('loads orders', async ({ page }) => {
+  await page.waitForResponse('**/orders*')
+})
+""",
+    )
+    assert (
+        VerificationStrategyGuard()
+        .evaluate(strategy=strategy, proposal=proposal)
+        .allowed
+        is remote
+    )
+
+
+def test_mixed_applies_browser_boundary_per_file_and_keeps_unit_mocks(tmp_path):
+    strategy = mixed_strategy(tmp_path)
+    unit = make_proposal(
+        relative_path="tests/unit/usersStore.test.ts",
+        content="""
+import { expect, test, vi } from 'vitest'
+vi.mock('@/api/users', () => ({ listUsers: vi.fn() }))
+test('resets pageSize', () => expect(store.page).toBe(1))
+""",
+    )
+    e2e = make_proposal(
+        relative_path="tests/e2e/users.spec.ts",
+        content="""
+import { expect, test } from '@playwright/test'
+test('changes page size', async ({ page }) => {
+  await page.goto('/users')
+  await page.getByLabel('Page size').selectOption('20')
+  await expect(page.getByLabel('Page size')).toHaveValue('20')
+  await expect(page.getByText('Page 1 of 2')).toBeVisible()
+})
+""",
+    )
+    combined = unit.model_copy(update={"patches": [*unit.patches, *e2e.patches]})
+    assert (
+        VerificationStrategyGuard()
+        .evaluate(strategy=strategy, proposal=combined)
+        .allowed
+    )
+    browser_in_unit = make_proposal(
+        relative_path="tests/unit/usersStore.test.ts",
+        content=e2e.patches[0].after_content,
+    )
+    rejected = VerificationStrategyGuard().evaluate(
+        strategy=strategy, proposal=browser_in_unit
+    )
+    assert not rejected.allowed
+    assert any(v.code == "UNIT_PLAYWRIGHT_IMPORT" for v in rejected.violations)
+
+
+def test_single_e2e_unknown_cannot_use_missing_endpoint_evidence_as_permission(
+    tmp_path,
+):
+    strategy = VerificationStrategyResolver().resolve(
+        repository_root=tmp_path,
+        task=make_task(),
+        repository=make_repository(tmp_path),
+        code_context=[],
+        execution_surface=make_e2e_surface(),
+    )
+    proposal = make_proposal(
+        relative_path="tests/e2e/orders.spec.ts",
+        content="await page.waitForResponse('**/users*')",
+    )
+    assert strategy.runtime_path == "unknown"
+    assert (
+        not VerificationStrategyGuard()
+        .evaluate(strategy=strategy, proposal=proposal)
+        .allowed
+    )
+
+
+def test_known_feature_hints_preserve_unrelated_network_setup_compatibility(tmp_path):
+    strategy = mixed_strategy(tmp_path, code_context=make_code_context())
+    proposal = make_proposal(
+        relative_path="tests/e2e/users.spec.ts",
+        content="await page.route('**/analytics*', route => route.abort())",
+    )
+    assert strategy.remote_endpoint_hints == ["/orders"]
+    assert (
+        VerificationStrategyGuard()
+        .evaluate(strategy=strategy, proposal=proposal)
+        .allowed
+    )
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "单元测试验证切换 pageSize 时 page 被重置为 1。",
+        "组件测试验证选择 20 后控件值与查询模型 pageSize 保持一致。",
+        "Unit tests verify pageSize changes reload users.",
+        "Component tests verify rendered pagination state.",
+    ],
+)
+def test_explicit_unit_proof_precedes_page_and_ui_keywords(description):
+    assert (
+        VerificationStrategyResolver()._preferred_layer_for_proof(
+            description=description,
+            current_layer="mixed",
+            runtime_path="unknown",
+        )
+        == "unit"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corrected", [False, True])
+async def test_mixed_guard_rejects_before_apply_and_allows_only_bounded_strategy_correction(
+    tmp_path, monkeypatch, corrected
+):
+    from agent_core.benchmark import verification_strategy as module
+
+    strategy = mixed_strategy(tmp_path)
+    bad = make_proposal(
+        relative_path="tests/e2e/users.spec.ts",
+        content="await page.waitForResponse('**/users*')",
+    )
+    good = make_proposal(
+        relative_path="tests/e2e/users.spec.ts",
+        content="await expect(page.getByLabel('Page size')).toHaveValue('20')",
+    )
+    seen_policies = []
+
+    async def generate(self, **kwargs):
+        seen_policies.append(kwargs["effective_policy"])
+        return good if corrected and len(seen_policies) == 2 else bad
+
+    monkeypatch.setattr(module.PatchGenerator, "generate", generate)
+    generator = VerificationStrategyPatchGenerator(
+        repository_root=tmp_path, model=object(), max_corrections=1
+    )
+    arguments = dict(
+        artifact=object(),
+        plan=object(),
+        preparation=object(),
+        effective_policy=EffectivePolicy(rules=[]),
+        strategy=strategy,
+    )
+    if corrected:
+        result = await generator.generate(**arguments)
+        assert result.proposal == good
+        assert result.correction_count == 1
+    else:
+        with pytest.raises(VerificationStrategyError, match="E2E_WAIT_FOR_RESPONSE"):
+            await generator.generate(**arguments)
+    assert len(seen_policies) == 2
+    assert any(
+        rule.rule_id == "TEST-STRATEGY-CORRECTION-001"
+        for rule in seen_policies[-1].rules
+    )
+
+
+def test_incomplete_legacy_mixed_plan_cannot_grant_unproven_network_permission(
+    tmp_path,
+):
+    strategy = mixed_strategy(tmp_path).model_copy(
+        update={
+            "allowed_strategies": [],
+            "forbidden_strategies": [],
+        }
+    )
+    proposal = make_proposal(
+        relative_path="tests/e2e/users.spec.ts",
+        content="await page.waitForResponse('**/users*')",
+    )
+    assert (
+        not VerificationStrategyGuard()
+        .evaluate(strategy=strategy, proposal=proposal)
+        .allowed
+    )
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Playwright E2E must inject remote HTTP failure",
+        "Playwright 端到端测试注入错误并验证 error 状态",
+        "E2E verifies request parameter mapping",
+    ],
+)
+def test_explicit_e2e_label_does_not_override_remote_or_failure_capability(description):
+    routes = VerificationStrategyResolver()._build_proof_routes(
+        task=make_task(),
+        selected_layer="e2e",
+        runtime_path="local_mock",
+        requirement_acceptance_criteria=[description],
+        technical_testing_strategy=[],
+    )
+    proof = next(route for route in routes if route.description == description)
+    assert proof.preferred_layer == "unit"
+    assert proof.routing_action == "deferred"
+    assert not proof.observable_in_current_layer
