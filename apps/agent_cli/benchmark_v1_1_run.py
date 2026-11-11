@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+from copy import deepcopy
+from uuid import uuid4
 
 from dotenv import load_dotenv
 
@@ -33,6 +35,10 @@ from agent_core.codebase.openai_reranker import (
 from agent_core.artifacts.store import JsonTaskArtifactStore
 from agent_core.benchmark.change_surface_evaluator import ChangeSurfaceEvaluator
 from agent_core.benchmark.full_execution import FullExecutionBenchmarkService
+from agent_core.benchmark.full_execution_ab import compare_full_execution_ab
+from agent_core.benchmark.model_usage import MeteredLLM
+from agent_core.benchmark.selection_evidence_binding import json_digest
+from agent_core.llm.retrying import RetryingLLM
 from agent_core.benchmark.prepared_execution import (
     HistoricalPreparedExecutionFinder,
     PreparedExecutionInput,
@@ -111,6 +117,23 @@ def _parse_args():
             "在真实 Full Execution 中校验 Guarded Context 候选；"
             "Coding Agent 仍消费 Baseline，生产 Active 保持关闭"
         ),
+    )
+
+    parser.add_argument(
+        "--context-guarded-active",
+        action="store_true",
+        help="仅在隔离 Benchmark 中为 CASE-006/TASK-002 启用受控候选消费，生产默认保持关闭",
+    )
+    parser.add_argument(
+        "--context-ab",
+        action="store_true",
+        help="固定 Prepared Input，分别运行 Baseline 和受控 Active 并输出完整 A/B 验收报告",
+    )
+    parser.add_argument(
+        "--benchmark-repository",
+        type=Path,
+        default=Path(r"D:\project\fe-agent-benchmark-web"),
+        help="Benchmark 目标仓库路径",
     )
 
     parser.add_argument(
@@ -535,18 +558,200 @@ async def _prepare_fresh(
     return prepared
 
 
+def _meter_llm(llm):
+    # Meter actual provider attempts, including retries, without mutating the
+    # shared runner or changing its retry policy.
+    if isinstance(llm, RetryingLLM):
+        wrapped, meter = _meter_llm(llm.llm)
+        return RetryingLLM(llm=wrapped, retry_policy=deepcopy(llm.retry_policy)), meter
+    meter = MeteredLLM(llm)
+    return meter, meter
+
+
+def _experiment_identity(*, case, prepared, baseline, fe_agent_root, preflight):
+    artifact_root = (
+        fe_agent_root
+        / ".fe-agent"
+        / "benchmark"
+        / "harness"
+        / prepared.baseline_run_id
+        / "artifacts"
+    )
+    artifacts = {
+        path.relative_to(artifact_root)
+        .as_posix(): hashlib.sha256(path.read_bytes())
+        .hexdigest()
+        for path in sorted(artifact_root.glob("*/*.json"))
+    }
+    if not artifacts:
+        raise RuntimeError("Active experiment requires frozen upstream artifacts")
+    return {
+        "case_sha256": json_digest(case.model_dump(mode="json")),
+        "prepared_input_sha256": json_digest(
+            {
+                "prepared": prepared.model_dump(mode="json"),
+                "requirement": baseline.requirement_spec.model_dump(mode="json"),
+                "technical_spec": baseline.technical_spec.model_dump(mode="json"),
+                "task_plan": baseline.task_plan.model_dump(mode="json"),
+                "project": baseline.project_context.model_dump(mode="json"),
+            }
+        ),
+        "upstream_artifacts_sha256": json_digest(artifacts),
+        "model_config_sha256": json_digest(
+            {
+                "models": {
+                    key: os.getenv(key)
+                    for key in (
+                        "LLM_MODEL_ID",
+                        "LLM_BASE_URL",
+                        "EMBEDDING_MODEL_ID",
+                        "EMBEDDING_BASE_URL",
+                        "RERANK_MODEL_ID",
+                        "RERANK_BASE_URL",
+                    )
+                },
+                "implementation": "v1.4.9-final",
+                "mode": "frozen_prepared_input",
+            }
+        ),
+        "canary_sha256": preflight.canary_sha256,
+        "approved_revision": preflight.approved_revision,
+    }
+
+
+async def _execute_prepared_run(
+    *,
+    fe_agent_root,
+    benchmark_repository,
+    runner,
+    case,
+    prepared,
+    baseline,
+    mode="baseline",
+    preflight=None,
+    identity=None,
+    observer=None,
+):
+    llm, meter = _meter_llm(runner.requirement_analyzer.llm)
+    repository = _repository_profile(
+        baseline=baseline, benchmark_repository=benchmark_repository
+    )
+    coordinator = _coordinator_for_baseline(
+        fe_agent_root=fe_agent_root,
+        baseline_run_id=prepared.baseline_run_id,
+        llm=llm,
+    )
+    selection_service = _build_context_selection_service(runner=runner)
+    if observer is None and mode != "baseline":
+        observer = create_full_execution_shadow_observer()
+    return await FullExecutionBenchmarkService(
+        fe_agent_root=fe_agent_root,
+        benchmark_repository=benchmark_repository,
+        baseline_run_id=prepared.baseline_run_id,
+        llm=llm,
+        coordinator=coordinator,
+        context_selection_service=selection_service,
+        context_shadow_observer=observer,
+        context_guarded_preflight=(
+            preflight if mode in {"preview", "active_experiment"} else None
+        ),
+        experimental_context_active=mode == "active_experiment",
+        context_experiment_identity=identity,
+        model_usage_meter=meter,
+    ).run(
+        case=deepcopy(case),
+        task_plan=deepcopy(baseline.task_plan),
+        requirement=deepcopy(baseline.requirement_spec),
+        technical_spec=deepcopy(baseline.technical_spec),
+        repository=repository,
+        engineering_rules=list(baseline.project_context.engineering_rules),
+        task_surfaces=deepcopy(prepared.task_surfaces),
+    )
+
+
+def _execution_failure_details(record):
+    """Expose the failing gate without requiring another paid model run."""
+
+    def excerpt(value):
+        if not isinstance(value, str):
+            return value
+        return (
+            value
+            if len(value) <= 6000
+            else value[:6000] + "\n[truncated; see run record]"
+        )
+
+    evaluation = getattr(record, "evaluation", None)
+    usage = getattr(record, "model_usage", None) or {}
+    return {
+        "run_status": record.status,
+        "run_error": excerpt(getattr(record, "error", None)),
+        "failed_tasks": [
+            {
+                "task_id": task.task_id,
+                "task_type": task.task_type,
+                "error": excerpt(task.error),
+                "failed_checks": [
+                    {
+                        "command_id": check.command_id,
+                        "name": check.name,
+                        "details": excerpt(check.details),
+                    }
+                    for check in task.verification_checks
+                    if check.status == "failed"
+                ],
+            }
+            for task in getattr(record, "tasks", [])
+            if task.status == "failed"
+        ],
+        "evaluation_status": getattr(evaluation, "status", None),
+        "evaluation_failure_reasons": list(getattr(evaluation, "failure_reasons", [])),
+        "hidden_acceptance_status": getattr(
+            getattr(record, "hidden_acceptance", None), "status", None
+        ),
+        "usage_complete": usage.get("usage_complete", False),
+        "failed_model_calls": usage.get("failed_calls"),
+    }
+
+
+def _write_ab_report(fe_agent_root, report):
+    directory = fe_agent_root / ".fe-agent" / "benchmark" / "full_execution" / "ab"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (uuid4().hex + ".json")
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(report, stream, ensure_ascii=False, indent=2, allow_nan=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(f"ab_report={path}")
+    return path
+
+
 async def main():
     args = _parse_args()
     fe_agent_root = Path(__file__).resolve().parents[2]
-    benchmark_repository = Path(r"D:\project\fe-agent-benchmark-web")
+    benchmark_repository = getattr(
+        args, "benchmark_repository", Path(r"D:\project\fe-agent-benchmark-web")
+    )
     case_id = args.case_id
     guarded_preview = getattr(args, "context_guarded_preview", False)
-    if guarded_preview and (
-        args.context_active_preflight or args.context_shadow or args.refresh_upstream
+    guarded_active = getattr(args, "context_guarded_active", False)
+    context_ab = getattr(args, "context_ab", False)
+    guarded_mode = guarded_preview or guarded_active or context_ab
+    modes = (
+        args.context_active_preflight,
+        args.context_shadow,
+        guarded_preview,
+        guarded_active,
+        context_ab,
+    )
+    if sum(bool(value) for value in modes) > 1 or (
+        guarded_mode and args.refresh_upstream
     ):
         raise SystemExit(
-            "--context-guarded-preview 不能与 --context-active-preflight / "
-            "--context-shadow / --refresh-upstream 同时使用"
+            "Context 模式不能与其他模式同时使用；受控实验不能使用 --refresh-upstream"
         )
 
     # ======================================
@@ -564,7 +769,7 @@ async def main():
     # 防止普通 Full Execution 意外接受
     # Active 的授权参数却不执行准入检查。
     context_guarded_preflight = None
-    if guarded_preview:
+    if guarded_mode:
         # 在模型、检索服务及 Worktree 初始化前执行既有 D2-A 门禁。
         context_guarded_preflight = _checked_active_preflight(
             args=args,
@@ -574,7 +779,7 @@ async def main():
     elif args.active_task_id is not None or args.approved_revision is not None:
         raise SystemExit(
             "Active 参数只能与 --context-active-preflight / "
-            "--context-guarded-preview 一起使用"
+            "--context-guarded-preview / --context-guarded-active / --context-ab 一起使用"
         )
 
     dependency_preflight = NodeModulesWorkspaceProvisioner(
@@ -605,7 +810,7 @@ async def main():
                 prepared_store.save(prepared)
 
     if prepared is None:
-        if guarded_preview:
+        if guarded_mode:
             raise SystemExit(
                 "Guarded Preview 需要既有 passed Prepared Execution Input；"
                 "请先完成普通 Benchmark 的上游准备"
@@ -646,45 +851,190 @@ async def main():
     ):
         raise RuntimeError("Prepared baseline record 缺少结构化数据")
 
-    llm = runner.requirement_analyzer.llm
-    repository = _repository_profile(
-        baseline=baseline,
-        benchmark_repository=benchmark_repository,
-    )
-    coordinator = _coordinator_for_baseline(
+    common = dict(
         fe_agent_root=fe_agent_root,
-        baseline_run_id=prepared.baseline_run_id,
-        llm=llm,
+        benchmark_repository=benchmark_repository,
+        runner=runner,
+        case=case,
+        prepared=prepared,
+        baseline=baseline,
     )
-
-    print("=== Full Execution Benchmark ===")
-    context_selection_service = _build_context_selection_service(runner=runner)
-
-    context_shadow_observer = (
-        create_full_execution_shadow_observer()
-        if args.context_shadow or guarded_preview
+    identity_args = dict(
+        case=case,
+        prepared=prepared,
+        baseline=baseline,
+        fe_agent_root=fe_agent_root,
+        preflight=context_guarded_preflight,
+    )
+    identity = (
+        _experiment_identity(**identity_args)
+        if (guarded_active or context_ab)
         else None
     )
-    execution = await FullExecutionBenchmarkService(
-        fe_agent_root=fe_agent_root,
-        benchmark_repository=(benchmark_repository),
-        baseline_run_id=(prepared.baseline_run_id),
-        llm=llm,
-        coordinator=coordinator,
-        context_selection_service=(context_selection_service),
-        context_shadow_observer=context_shadow_observer,
-        context_guarded_preflight=context_guarded_preflight,
-    ).run(
-        case=case,
-        task_plan=baseline.task_plan,
-        requirement=(baseline.requirement_spec),
-        technical_spec=(baseline.technical_spec),
-        repository=repository,
-        engineering_rules=list(baseline.project_context.engineering_rules),
-        task_surfaces=(prepared.task_surfaces),
+    print("=== Full Execution Benchmark ===")
+    if context_ab:
+        try:
+            active_observer = create_full_execution_shadow_observer()
+            baseline_execution = await _execute_prepared_run(
+                **common, mode="baseline", identity=identity
+            )
+        except Exception as exc:
+            _write_ab_report(
+                fe_agent_root,
+                {
+                    "version": "v1.4.9-final",
+                    "status": "failed",
+                    "reason": "baseline_execution_unavailable",
+                    "error_type": type(exc).__name__,
+                    "baseline_run_id": None,
+                    "active_run_id": None,
+                    "production_ready": False,
+                },
+            )
+            raise SystemExit(2) from exc
+        if (
+            baseline_execution.status != "completed"
+            or baseline_execution.evaluation is None
+            or baseline_execution.evaluation.status != "passed"
+        ):
+            _write_ab_report(
+                fe_agent_root,
+                {
+                    "version": "v1.4.9-final",
+                    "status": "failed",
+                    "reason": "baseline_failed",
+                    "baseline_run_id": baseline_execution.run_id,
+                    "baseline_record": str(
+                        fe_agent_root
+                        / ".fe-agent"
+                        / "benchmark"
+                        / "full_execution"
+                        / "runs"
+                        / (baseline_execution.run_id + ".json")
+                    ),
+                    "baseline_failure": _execution_failure_details(baseline_execution),
+                    "active_run_id": None,
+                    "production_ready": False,
+                },
+            )
+            raise SystemExit(2)
+        try:
+            refreshed = _checked_active_preflight(
+                args=args,
+                fe_agent_root=fe_agent_root,
+                benchmark_repository=benchmark_repository,
+            )
+            refreshed_identity = _experiment_identity(
+                **{**identity_args, "preflight": refreshed}
+            )
+            if refreshed_identity != identity:
+                raise RuntimeError("Frozen A/B inputs changed after Baseline")
+        except (Exception, SystemExit) as exc:
+            _write_ab_report(
+                fe_agent_root,
+                {
+                    "version": "v1.4.9-final",
+                    "status": "failed",
+                    "reason": "admission_or_inputs_changed",
+                    "error_type": type(exc).__name__,
+                    "baseline_run_id": baseline_execution.run_id,
+                    "active_run_id": None,
+                    "production_ready": False,
+                },
+            )
+            raise SystemExit(2) from exc
+        try:
+            active_execution = await _execute_prepared_run(
+                **common,
+                mode="active_experiment",
+                preflight=refreshed,
+                identity=identity,
+                observer=active_observer,
+            )
+        except Exception as exc:
+            _write_ab_report(
+                fe_agent_root,
+                {
+                    "version": "v1.4.9-final",
+                    "status": "failed",
+                    "reason": "active_execution_unavailable",
+                    "error_type": type(exc).__name__,
+                    "baseline_run_id": baseline_execution.run_id,
+                    "active_run_id": None,
+                    "production_ready": False,
+                },
+            )
+            raise SystemExit(2) from exc
+        report = compare_full_execution_ab(
+            baseline=baseline_execution, active=active_execution
+        )
+        try:
+            final_preflight = _checked_active_preflight(
+                args=args,
+                fe_agent_root=fe_agent_root,
+                benchmark_repository=benchmark_repository,
+            )
+            inputs_unchanged = (
+                _experiment_identity(**{**identity_args, "preflight": final_preflight})
+                == identity
+            )
+        except (Exception, SystemExit):
+            inputs_unchanged = False
+        if not inputs_unchanged:
+            report["status"] = "failed"
+            report["quality_passed"] = False
+            report["failure_reasons"].append("frozen_inputs_changed_during_active")
+        _write_ab_report(fe_agent_root, report)
+        if report["status"] != "passed":
+            raise SystemExit(2)
+        return
+    mode = (
+        "active_experiment"
+        if guarded_active
+        else (
+            "preview"
+            if guarded_preview
+            else "shadow" if args.context_shadow else "baseline"
+        )
+    )
+    execution = await _execute_prepared_run(
+        **common,
+        mode=mode,
+        preflight=context_guarded_preflight,
+        identity=identity,
     )
     print(execution.model_dump_json(indent=2))
     print(f"full_execution_run_id={execution.run_id}")
+    if guarded_active:
+        task = next(
+            (task for task in execution.tasks if task.task_id == "TASK-002"), None
+        )
+        active_report = getattr(task, "context_guarded_active", None) or {}
+        if not (
+            active_report.get("status") == "active"
+            and active_report.get("applied") is True
+            and active_report.get("active_execution_enabled") is True
+            and active_report.get("production_ready") is False
+        ):
+            raise SystemExit(
+                "Active experiment was not applied; baseline fallback is not an optimization result"
+            )
+        final_preflight = _checked_active_preflight(
+            args=args,
+            fe_agent_root=fe_agent_root,
+            benchmark_repository=benchmark_repository,
+        )
+        if (
+            _experiment_identity(**{**identity_args, "preflight": final_preflight})
+            != identity
+        ):
+            raise SystemExit("Frozen experiment inputs changed during Active")
+    if guarded_mode and (
+        execution.status != "completed"
+        or execution.evaluation is None
+        or execution.evaluation.status != "passed"
+    ):
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -9,6 +10,7 @@ from agent_core.benchmark.context_policy_runtime import (
     GuardedContextPolicyConsumer,
     MissingMandatoryContextError,
     StaleContextEvidenceError,
+    _additional_source_hashes,
 )
 from agent_core.benchmark.full_execution_active_preflight import (
     ActivePreflightDecision,
@@ -21,6 +23,7 @@ from agent_core.benchmark.full_execution_context_shadow import (
 )
 from agent_core.benchmark.selection_evidence_binding import (
     json_digest,
+    capture_selection_evidence,
 )
 from agent_core.change_surface.model import ResolvedChangeSurface
 from agent_core.codebase.model import HybridRelevantFileSelection
@@ -49,7 +52,13 @@ class GuardedTrialReport:
     production_ready: bool = False
 
 
-def run_guarded_active_trial(
+@dataclass(frozen=True)
+class _GuardedCandidateResult:
+    report: GuardedTrialReport
+    candidate: TaskContextBundle | None = None
+
+
+def _build_guarded_candidate(
     *,
     repository_root: str | Path,
     raw_requirement: str,
@@ -64,7 +73,7 @@ def run_guarded_active_trial(
         [HybridRelevantFileSelection],
         TaskContextBundle,
     ],
-) -> GuardedTrialReport:
+) -> _GuardedCandidateResult:
     """
     D2-C1：在内存中试运行 P3 Active Consumer。
 
@@ -73,12 +82,70 @@ def run_guarded_active_trial(
       -> Obligation Evidence Enrichment
       -> Verification Strategy
 
-    返回摘要，不返回候选 Bundle。
-    不允许调用 Coding Agent / Patch。
+    Shared internal validator for report-only C1 and experimental handoff.
+    Only a fully validated candidate is exposed to the guarded outer pipeline.
+    Does not invoke Coding Agent or Patch.
     """
     baseline = final_baseline_bundle
     task_id = baseline.task.task_id
     revision = selection_result.repository_revision
+
+    frozen_bundle = deepcopy(baseline)
+    frozen_selection = deepcopy(selection_result)
+    frozen_surface = deepcopy(execution_surface)
+    frozen_obligations = list(obligation_evidence_files)
+    validated_candidate_digest = None
+    protected = (
+        set(execution_surface.implementation_targets)
+        | set(execution_surface.tests)
+        | set(execution_surface.dependencies)
+        | set(execution_surface.references)
+        | set(obligation_evidence_files)
+    )
+    strategy = baseline.verification_strategy
+    strategy_valid = strategy is None or (
+        isinstance(strategy, dict)
+        and isinstance(strategy.get("writable_test_files"), list)
+        and all(isinstance(path, str) for path in strategy["writable_test_files"])
+    )
+    if strategy_valid and strategy is not None:
+        protected.update(strategy["writable_test_files"])
+
+    def snapshot():
+        if (
+            get_current_revision() != revision
+            or baseline != frozen_bundle
+            or selection_result != frozen_selection
+            or execution_surface != frozen_surface
+            or obligation_evidence_files != frozen_obligations
+        ):
+            raise StaleContextEvidenceError("trial_inputs_changed")
+        evidence = capture_selection_evidence(
+            repository_root=repository_root,
+            selection=frozen_selection.selection,
+        )
+        context_digest = capture_final_context_source_digest(
+            repository_root=repository_root,
+            bundle=frozen_bundle,
+        )
+        sources = _additional_source_hashes(
+            Path(repository_root).resolve(strict=True),
+            protected,
+        )
+        if (
+            get_current_revision() != revision
+            or baseline != frozen_bundle
+            or selection_result != frozen_selection
+            or execution_surface != frozen_surface
+            or obligation_evidence_files != frozen_obligations
+        ):
+            raise StaleContextEvidenceError("trial_inputs_changed")
+        return evidence, context_digest, sources
+
+    try:
+        initial_snapshot = snapshot()
+    except Exception:
+        initial_snapshot = None
 
     before_paths = tuple(item.relative_path for item in baseline.code_context)
     before_chars = sum(len(item.content) for item in baseline.code_context)
@@ -87,7 +154,7 @@ def run_guarded_active_trial(
         current = bundle or baseline
         current_paths = tuple(item.relative_path for item in current.code_context)
         removed = tuple(path for path in before_paths if path not in current_paths)
-        return GuardedTrialReport(
+        result = GuardedTrialReport(
             status=status,
             reason=reason,
             task_id=task_id,
@@ -98,6 +165,27 @@ def run_guarded_active_trial(
             baseline_chars=before_chars,
             candidate_chars=sum(len(item.content) for item in current.code_context),
         )
+        try:
+            unchanged = initial_snapshot is not None and snapshot() == initial_snapshot
+        except Exception:
+            unchanged = False
+        if not unchanged:
+            result = replace(result, status="blocked", reason="final_snapshot_changed")
+        if status == "candidate_valid" and (
+            bundle is None
+            or validated_candidate_digest is None
+            or json_digest(bundle.model_dump(mode="json")) != validated_candidate_digest
+        ):
+            result = replace(
+                result, status="blocked", reason="validated_candidate_changed"
+            )
+        return _GuardedCandidateResult(
+            report=result,
+            candidate=bundle if result.status == "candidate_valid" else None,
+        )
+
+    if initial_snapshot is None:
+        return report("blocked", "baseline_source_unavailable")
 
     # 1. D2-A 准入状态必须与本次 Task/Revision 绑定。
     if not (
@@ -108,6 +196,7 @@ def run_guarded_active_trial(
         and preflight.current_revision == revision
         and preflight.canary_sha256
         and preflight.applied is False
+        and preflight.production_ready is False
         and preflight.active_execution_enabled is False
     ):
         return report("fallback", "preflight_not_eligible")
@@ -142,25 +231,27 @@ def run_guarded_active_trial(
     except (OSError, ValueError, UnicodeError):
         return report("blocked", "baseline_source_unavailable")
 
-    # 3. 保护真实消费上下文中的所有必要文件。
-    mandatory = (
-        set(execution_surface.implementation_targets)
-        | set(execution_surface.tests)
-        | set(execution_surface.dependencies)
-        | set(execution_surface.references)
-        | set(obligation_evidence_files)
-    )
-
-    strategy = baseline.verification_strategy
-    if strategy is not None:
-        writable = strategy.get("writable_test_files")
-        if not isinstance(writable, list) or any(
-            not isinstance(path, str) for path in writable
-        ):
-            return report("fallback", "strategy_schema_invalid")
-        mandatory.update(writable)
-
+    # Existing mandatory evidence must already be present. Only authorized
+    # create_files may be absent; intersection-only protection hides omissions.
+    if not strategy_valid:
+        return report("fallback", "strategy_schema_invalid")
+    mandatory = protected
     current_paths = set(before_paths)
+    mandatory_sources = initial_snapshot[2]
+    allowed_missing = set(execution_surface.create_files)
+    required_existing = {
+        path
+        for path in mandatory
+        if mandatory_sources[path.replace("\\", "/")] != "__missing__"
+    }
+    absent_required = {
+        path
+        for path in mandatory
+        if mandatory_sources[path.replace("\\", "/")] == "__missing__"
+        and path not in allowed_missing
+    }
+    if required_existing - current_paths or absent_required:
+        return report("blocked", "mandatory_context_missing")
     mandatory_in_context = mandatory & current_paths
 
     # 即使 D2-B 存在遗漏，D2-C 仍独立拒绝。
@@ -323,6 +414,8 @@ def run_guarded_active_trial(
             "context_budget_not_improved",
         )
 
+    validated_candidate_digest = json_digest(candidate.model_dump(mode="json"))
+
     # 9. 最后一次检查原始 Bundle 和源码没有变化。
     try:
         final_revision = get_current_revision()
@@ -345,3 +438,31 @@ def run_guarded_active_trial(
         "consumer_candidate_verified",
         bundle=candidate,
     )
+
+
+def run_guarded_active_trial(
+    *,
+    repository_root: str | Path,
+    raw_requirement: str,
+    selection_result: TaskContextSelectionResult,
+    final_baseline_bundle: TaskContextBundle,
+    execution_surface: ResolvedChangeSurface,
+    obligation_evidence_files: list[str],
+    preflight: ActivePreflightDecision,
+    preview: ActiveCandidatePreview,
+    get_current_revision: Callable[[], str],
+    build_final_context: Callable[[HybridRelevantFileSelection], TaskContextBundle],
+) -> GuardedTrialReport:
+    """Public C1 remains report-only; no candidate or Active authorization escapes."""
+    return _build_guarded_candidate(
+        repository_root=repository_root,
+        raw_requirement=raw_requirement,
+        selection_result=selection_result,
+        final_baseline_bundle=final_baseline_bundle,
+        execution_surface=execution_surface,
+        obligation_evidence_files=obligation_evidence_files,
+        preflight=preflight,
+        preview=preview,
+        get_current_revision=get_current_revision,
+        build_final_context=build_final_context,
+    ).report

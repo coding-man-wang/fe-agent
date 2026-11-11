@@ -229,7 +229,7 @@ class VerificationStrategyPlan(BaseModel):
         rules: list[EngineeringRule] = []
 
         required_lines = [
-            (f"- [{item.proof_id}] " f"{item.description}")
+            (f"- [{item.proof_id}] " f"({item.preferred_layer}) {item.description}")
             for item in self.required_proofs()
         ]
 
@@ -305,11 +305,17 @@ class VerificationStrategyPlan(BaseModel):
                         "request-count assertion "
                         "来证明该 Feature 的行为；"
                         "这些操作无法证明当前真实 Runtime Path。"
+                        "E2E 应通过用户操作后的控件值、分页状态、列表内容等可见结果"
+                        "验证完整流程；API 参数、调用和失败注入应在 unit 文件中"
+                        "通过 module mock 或 dependency stub 验证，保留全部证明义务。"
                     ),
                 )
             )
 
-        if self.runtime_path == "local_mock" and self.selected_layer == "e2e":
+        if self.runtime_path == "local_mock" and self.selected_layer in {
+            "e2e",
+            "mixed",
+        }:
             rules.append(
                 EngineeringRule(
                     rule_id=("TEST-E2E-LOCAL-MOCK-001"),
@@ -329,7 +335,7 @@ class VerificationStrategyPlan(BaseModel):
                 )
             )
 
-        if self.selected_layer == "unit":
+        if self.selected_layer in {"unit", "mixed"}:
             rules.append(
                 EngineeringRule(
                     rule_id=("TEST-UNIT-CAPABILITY-001"),
@@ -337,7 +343,7 @@ class VerificationStrategyPlan(BaseModel):
                     severity="must",
                     source="runtime",
                     description=(
-                        "当前测试层为 unit。"
+                        "当前任务中的 unit 测试文件遵循 unit 能力边界。"
                         "允许通过当前项目测试框架的 "
                         "module mock、dependency stub、"
                         "rejection injection "
@@ -345,6 +351,22 @@ class VerificationStrategyPlan(BaseModel):
                         "dependency failure、error state "
                         "等不适合 Browser E2E "
                         "直接注入的 Contract。"
+                    ),
+                )
+            )
+
+        if self.selected_layer == "mixed":
+            rules.append(
+                EngineeringRule(
+                    rule_id="TEST-MIXED-LAYER-001",
+                    category="verification_strategy",
+                    severity="must",
+                    source="runtime",
+                    description=(
+                        "当前任务同时包含 unit 与 e2e 文件。每个 Proof 必须在其 "
+                        "preferred_layer 对应的可写测试文件中验证；unit 的 mock 能力"
+                        "不能转授给 Browser E2E，E2E 的浏览器能力也不能用于 unit 文件。"
+                        "保留两层全部 required_here 义务，不得仅完成其中一层。"
                     ),
                 )
             )
@@ -841,12 +863,16 @@ class VerificationStrategyResolver:
             ),
         ]
 
-        if selected_layer == "e2e" and runtime_path == "remote_http" and has_playwright:
+        if (
+            selected_layer in {"e2e", "mixed"}
+            and runtime_path == "remote_http"
+            and has_playwright
+        ):
             network_status: CapabilityStatus = "available"
 
             network_evidence = ["current E2E runtime " "is proven remote_http"]
 
-        elif selected_layer == "e2e" and runtime_path == "local_mock":
+        elif selected_layer in {"e2e", "mixed"} and runtime_path == "local_mock":
             network_status = "unavailable"
 
             network_evidence = [
@@ -877,7 +903,7 @@ class VerificationStrategyResolver:
                 status=(
                     "available"
                     if (
-                        selected_layer == "e2e"
+                        selected_layer in {"e2e", "mixed"}
                         and runtime_path == "local_mock"
                         and has_playwright
                     )
@@ -967,7 +993,9 @@ class VerificationStrategyResolver:
                 runtime_path=(runtime_path),
             )
 
-            if preferred_layer == selected_layer:
+            if preferred_layer == selected_layer or (
+                selected_layer == "mixed" and preferred_layer in {"unit", "e2e"}
+            ):
                 routing_action: ProofRoutingAction = "required_here"
 
                 observable = True
@@ -1032,6 +1060,20 @@ class VerificationStrategyResolver:
 
         lower = description.lower()
 
+        # Explicit unit intent precedes broad behavior words such as pageSize.
+        # An E2E label cannot grant remote/failure-injection capabilities.
+        explicit_unit = bool(
+            re.search(r"\b(?:unit|vitest|jest|component\s+tests?)\b", lower)
+            or "单元测试" in lower
+            or "组件测试" in lower
+        )
+        explicit_e2e = bool(
+            re.search(r"\b(?:e2e|playwright|end[- ]to[- ]end)\b", lower)
+            or "端到端" in lower
+        )
+        if explicit_unit and not explicit_e2e:
+            return "unit"
+
         if self._contains_any(
             lower,
             self._REMOTE_CONTRACT_KEYWORDS,
@@ -1052,7 +1094,7 @@ class VerificationStrategyResolver:
             # 才可能适合，但当前先不扩大。
             return "unit"
 
-        if self._contains_any(
+        if (explicit_e2e and not explicit_unit) or self._contains_any(
             lower,
             self._E2E_BEHAVIOR_KEYWORDS,
         ):
@@ -1091,7 +1133,7 @@ class VerificationStrategyResolver:
 
         forbidden: list[str] = []
 
-        if selected_layer == "unit":
+        if selected_layer in {"unit", "mixed"}:
 
             allowed.extend(
                 [
@@ -1108,7 +1150,7 @@ class VerificationStrategyResolver:
                 ]
             )
 
-        elif selected_layer == "e2e":
+        if selected_layer in {"e2e", "mixed"}:
 
             allowed.extend(
                 [
@@ -1272,6 +1314,16 @@ class VerificationStrategyGuard:
             content = patch.after_content
 
             lower_path = path.lower()
+            file_layer = (
+                "unit"
+                if "/unit/" in f"/{lower_path}"
+                else "e2e" if "/e2e/" in f"/{lower_path}" else strategy.selected_layer
+            )
+            if file_layer in {"mixed", "unknown"} and (
+                "@playwright/test" in content
+                or any(pattern.search(content) for _, pattern in self._NETWORK_PATTERNS)
+            ):
+                file_layer = "e2e"
 
             # --------------------------------
             # Layer Boundary
@@ -1299,9 +1351,18 @@ class VerificationStrategyGuard:
             # E2E Network Capability
             # --------------------------------
 
-            if strategy.selected_layer == "e2e" and (
-                "e2e_remote_network_" "interception" in strategy.forbidden_strategies
-            ):
+            network_capability = strategy.capability(
+                "browser_feature_network_interception"
+            )
+            network_allowed = (
+                strategy.runtime_path == "remote_http"
+                and network_capability is not None
+                and network_capability.status == "available"
+                and "e2e_remote_network_interception" in strategy.allowed_strategies
+                and "e2e_remote_network_interception"
+                not in strategy.forbidden_strategies
+            )
+            if file_layer == "e2e" and not network_allowed:
 
                 if not self._touches_feature_endpoint(
                     content=content,
@@ -1337,7 +1398,7 @@ class VerificationStrategyGuard:
             # Unit Layer Browser Driver
             # --------------------------------
 
-            if strategy.selected_layer == "unit":
+            if file_layer == "unit":
                 for (
                     code,
                     pattern,
@@ -1374,18 +1435,13 @@ class VerificationStrategyGuard:
         避免把与当前 Feature 无关的
         page.route 一刀切禁止。
 
-        只有当前测试源码引用了
-        Current Repository 发现的
-        Feature endpoint，
-        才按 Feature Network Strategy
-        做 deterministic block。
+        已知 Feature endpoint 时保留无关网络配置的既有兼容性。
+        缺少 endpoint Evidence 不能证明网络操作与 Feature 无关，
+        因此必须保持禁止策略，不能把未知当作授权。
         """
 
         if not endpoint_hints:
-            # 没有 endpoint Evidence 时，
-            # Harness 不做过度推断；
-            # 仍由 Dynamic Policy 约束模型。
-            return False
+            return True
 
         lower = content.lower()
 

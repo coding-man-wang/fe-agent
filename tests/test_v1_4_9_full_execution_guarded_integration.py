@@ -249,6 +249,7 @@ async def test_run_identity_rejected_before_planning_storage_or_model(
         base_commit_sha=revision,
         requirement=trial_case["raw_requirement"],
         expectation=BenchmarkExpectation(
+            expected_files=["src/f1.ts"],
             expected_behaviors=["Preserve behavior"],
             verification_command_ids=["test:unit"],
         ),
@@ -359,7 +360,9 @@ async def test_real_service_loop_preserves_baseline_or_blocks_before_model(
     )
 
     async def resolve_surface(**kwargs):
-        return surface.model_copy(deep=True)
+        return surface.model_copy(
+            deep=True, update={"execution_disposition": "change_required"}
+        )
 
     monkeypatch.setattr(coordinator, "resolve_change_surface", resolve_surface)
     monkeypatch.setattr(execution, "CommittedSnapshotWorktreeManager", SnapshotManager)
@@ -404,6 +407,7 @@ async def test_real_service_loop_preserves_baseline_or_blocks_before_model(
         base_commit_sha=revision,
         requirement=trial_case["raw_requirement"],
         expectation=BenchmarkExpectation(
+            expected_files=["src/f1.ts"],
             expected_behaviors=["Preserve behavior"],
             verification_command_ids=["test:unit"],
         ),
@@ -421,11 +425,11 @@ async def test_real_service_loop_preserves_baseline_or_blocks_before_model(
     assert counts["removed"] == 1
     assert record.status == "failed"  # Intentional stop, never a claimed E2E success.
     if mode == "source_changed":
-        assert counts["model"] == 0
+        assert counts["model"] == 0, record.error
         assert "Guarded Preview blocked" in record.error
         assert record.tasks[0].context_guarded_preview["status"] == "blocked"
     elif mode == "message_bundle_changed":
-        assert counts["model"] == 0
+        assert counts["model"] == 0, record.error
         assert "changed before model consumption" in record.error
         report = record.tasks[0].context_guarded_preview
         assert report["status"] == "blocked"
@@ -443,7 +447,7 @@ async def test_real_service_loop_preserves_baseline_or_blocks_before_model(
         assert events[-1]["reason"] == "changed_before_model_consumption"
         assert events[-1]["applied"] is False
     else:
-        assert counts["model"] == 1
+        assert counts["model"] == 1, record.error
         assert "MODEL_BOUNDARY_REACHED" in record.error
         assert "src/f6.ts" in {item.relative_path for item in consumed[0].code_context}
         if mode == "preview":
