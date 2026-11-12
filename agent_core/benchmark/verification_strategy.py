@@ -371,6 +371,28 @@ class VerificationStrategyPlan(BaseModel):
                 )
             )
 
+
+        if self.selected_layer in {"e2e", "mixed"}:
+            rules.append(
+                EngineeringRule(
+                    rule_id="TEST-E2E-SELECT-ASSERTION-001",
+                    category="verification_strategy",
+                    severity="must",
+                    source="runtime",
+                    description=(
+                        "Browser E2E 测试必须区分三种行为："
+                        "1. 验证 option 的静态 value 属性，"
+                        "使用 toHaveAttribute('value', expected)；"
+                        "2. 验证 select 当前选择值，"
+                        "在 select locator 上使用 toHaveValue(expected)；"
+                        "3. 验证交互行为，必须执行 selectOption，"
+                        "然后检查页面可见状态、分页变化和相关行为。"
+                        "不得仅检查选项存在，就声称完成分页切换测试。"
+                        "不得删除原有 Verification Obligation。"
+                    ),
+                )
+            )
+
         return rules
 
 
@@ -1293,6 +1315,42 @@ class VerificationStrategyGuard:
         ),
     )
 
+    _OPTION_DIRECT_VALUE_ASSERTION = re.compile(
+        r"\bexpect\s*\("
+        r"(?:(?!\bexpect\s*\().){0,250}?"
+        r"\.locator\s*\(\s*(['\"])option\1\s*\)"
+        r"(?:\s*\.nth\s*\(\s*\d+\s*\))?"
+        r"\s*\)\s*\.toHaveValue\s*\(",
+        re.DOTALL,
+    )
+
+    _OPTION_LOCATOR_ASSIGNMENT = re.compile(
+        r"\b(?:const|let)\s+"
+        r"(?P<name>[A-Za-z_$][\w$]*)\s*="
+        r"\s*[^\n;]{0,250}?"
+        r"\.locator\s*\(\s*(['\"])option\2\s*\)"
+    )
+
+    @classmethod
+    def _has_invalid_option_value_assertion(
+        cls,
+        content: str,
+    ) -> bool:
+        if cls._OPTION_DIRECT_VALUE_ASSERTION.search(content):
+            return True
+
+        for match in cls._OPTION_LOCATOR_ASSIGNMENT.finditer(content):
+            name = re.escape(match.group("name"))
+            pattern = (
+                rf"\bexpect\s*\(\s*{name}"
+                r"\s*\.nth\s*\(\s*\d+\s*\)"
+                r"\s*\)\s*\.toHaveValue\s*\("
+            )
+            if re.search(pattern, content):
+                return True
+
+        return False
+
     def evaluate(
         self,
         *,
@@ -1344,6 +1402,24 @@ class VerificationStrategyGuard:
                         code=("TEST_LAYER_MISMATCH"),
                         relative_path=path,
                         message=("E2E Test Task " "不能生成 Unit test file"),
+                    )
+                )
+
+            if file_layer == "e2e" and self._has_invalid_option_value_assertion(
+                content
+            ):
+                violations.append(
+                    VerificationStrategyViolation(
+                        code="E2E_OPTION_VALUE_ASSERTION",
+                        relative_path=path,
+                        message=(
+                            "不能对 option locator 使用 toHaveValue "
+                            "证明可选值。检查选项属性应使用 "
+                            "toHaveAttribute('value', ...)；"
+                            "检查当前选择应在 select locator "
+                            "上使用 toHaveValue(...)。"
+                            "必须保留原有交互与行为验证。"
+                        ),
                     )
                 )
 

@@ -77,6 +77,44 @@ class ResolvedTaskContextBuilder:
             max_total_chars=max_total_chars,
             max_chars_per_file=max_chars_per_file,
         )
+
+
+        # RoleAwareContextPolicy 已经计算
+        # 哪些文件因为 Role Budget 未进入 Selection。
+        #
+        # 把只读 Surface 文件的裁剪事实保留到
+        # 最终 TaskContextBundle，供 Guarded Active 审核。
+        optional_paths = (
+            set(surface.dependencies)
+            | set(surface.references)
+        )
+
+        indexable_paths = {
+            item.relative_path
+            for item in index.files
+            if item.is_indexable
+        }
+
+        skipped = list(base.budget.skipped_files)
+
+        for path in refined.skipped_by_budget:
+            if (
+                path in optional_paths
+                and path in indexable_paths
+                and path not in skipped
+            ):
+                skipped.append(path)
+
+        if skipped != base.budget.skipped_files:
+            base = base.model_copy(
+                deep=True,
+                update={
+                    "budget": base.budget.model_copy(
+                        update={"skipped_files": skipped}
+                    )
+                },
+            )
+
         investigations = self.artifact_resolver.upstream_investigations(
             task=task,
             task_plan=task_plan,

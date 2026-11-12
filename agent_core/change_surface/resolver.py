@@ -84,6 +84,25 @@ class ChangeSurfaceResolver:
                 bundle.repository.root_path
             )
 
+        # Only current repository evidence may supply canonical test targets.
+        # No Benchmark Oracle or hidden acceptance data enters this stage.
+        component_source_paths: set[str] = set()
+        if bundle.task.task_type == "test":
+            component_source_paths.update(
+                item.relative_path for item in bundle.code_context
+            )
+            component_source_paths.update(
+                item.relative_path for item in selection.selected_files
+            )
+            component_source_paths.update(
+                change.relative_path
+                for execution in execution_artifacts
+                for change in execution.changed_files
+            )
+        canonical_test_targets = CreateTargetPolicy.canonical_component_test_targets(
+            component_source_paths
+        )
+
         payload = {
             "task": (bundle.task.model_dump(mode="json")),
             "requirement": (bundle.requirement.model_dump(mode="json")),
@@ -132,6 +151,7 @@ class ChangeSurfaceResolver:
             "available_paths": sorted(available_paths),
             "runtime_candidate_targets": sorted(candidate_targets),
             "creatable_test_roots": (creatable_test_roots),
+            "canonical_test_targets": sorted(set(canonical_test_targets.values())),
         }
 
         request = ChatRequest(
@@ -165,6 +185,11 @@ class ChangeSurfaceResolver:
                     candidate_targets=candidate_targets,
                     investigation_roles=investigation_roles,
                 )
+                if bundle.task.task_type == "test":
+                    surface = self._normalize_test_create_paths(
+                        surface=surface,
+                        canonical_targets=canonical_test_targets,
+                    )
                 surface = self._derive_execution_disposition(
                     surface=surface,
                     task_type=bundle.task.task_type,
@@ -213,6 +238,58 @@ class ChangeSurfaceResolver:
             f"validation_error: {error_detail}\n"
             f"raw_output_preview: {output_preview}"
         ) from last_error
+
+    @staticmethod
+    def _normalize_test_create_paths(
+        *,
+        surface: ResolvedChangeSurface,
+        canonical_targets: dict[str, str],
+    ) -> ResolvedChangeSurface:
+        """Keep tests/create_files synchronized before the existing scope checks.
+
+        Only model-proposed *new* files can be normalized. Existing targets are
+        never silently renamed or promoted to write targets.
+        """
+        replacements = {
+            path: CreateTargetPolicy.canonicalize_component_test_create_path(
+                path, canonical_targets
+            )
+            for path in surface.create_files
+        }
+        changes = {
+            original: new
+            for original, new in replacements.items()
+            if original != new
+        }
+        if not changes:
+            return surface
+
+        new_tests = [changes.get(path, path) for path in surface.tests]
+        new_creates = [changes.get(path, path) for path in surface.create_files]
+        if (
+            len(new_tests) != len(set(new_tests))
+            or len(new_creates) != len(set(new_creates))
+        ):
+            raise ChangeSurfaceResolutionError(
+                "TEST_TARGET_COLLISION: multiple proposed test paths "
+                "normalize to the same canonical path"
+            )
+
+        return surface.model_copy(
+            deep=True,
+            update={
+                "tests": new_tests,
+                "create_files": new_creates,
+                "rationale": [
+                    *surface.rationale,
+                    *[
+                        "test-target-canonicalization: "
+                        f"{old} -> {new} (current repository Vue source evidence)"
+                        for old, new in sorted(changes.items())
+                    ],
+                ],
+            },
+        )
 
     @staticmethod
     def _build_system_prompt(
@@ -559,6 +636,12 @@ class ChangeSurfaceResolver:
 
 42. 不允许 create production source、
     config、package、router 或其他测试目录之外的文件。
+43. 对 test Task，新建组件单测文件时，
+    优先使用输入中的 canonical_test_targets（根据当前 Repository 的 Vue 源文件推导）。
+    不得自行改变组件名的大小写，或随意新增 .pagination 等命名后缀。
+    如果规范目标已存在，优先复用现有测试文件并遵守已有 Surface 边界；
+    不得为了绕开现有文件检查而另起一个相似名称。
+    canonical_test_targets 不等于写入授权，仍需满足 create_files 校验。
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """.strip()

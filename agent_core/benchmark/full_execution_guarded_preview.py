@@ -212,19 +212,41 @@ async def _run_full_execution_guarded_context(
             and preflight.production_ready is False
             and preflight.active_execution_enabled is False
         )
+
+        # 必须交给 Coding Agent 的证据。
+        hard_required = (
+            set(execution_surface.implementation_targets)
+            | set(execution_surface.tests)
+            | set(frozen_obligations)
+        )
+
+        if strategy_valid and strategy is not None:
+            hard_required.update(strategy["writable_test_files"])
+
+        # protected 保持原来的完整集合，不缩小。
+        # initial_snapshot[2] 保存所有 protected 文件的源码状态。
+        optional_paths = set(execution_surface.dependencies) | set(
+            execution_surface.references
+        )
+
+        budget_omitted = set(baseline.budget.skipped_files) & optional_paths
+
         existing_required = {
             path
             for path, digest in initial_snapshot[2].items()
             if digest != "__missing__"
         }
+
         absent_required = {
             path
             for path, digest in initial_snapshot[2].items()
-            if digest == "__missing__"
-        } - {path.replace("\\", "/") for path in execution_surface.create_files}
+            if digest == "__missing__" and path not in execution_surface.create_files
+        }
+
         missing_mandatory = (
-            existing_required - {path.replace("\\", "/") for path in paths}
+            existing_required - set(paths) - budget_omitted
         ) | absent_required
+
         try:
             if mode == "active" and experimental_active_enabled is not True:
                 result = replace(result, reason="experimental_active_disabled")

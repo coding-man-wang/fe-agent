@@ -84,6 +84,29 @@ class VerificationRepairOutput(BaseModel):
         return self
 
 
+def summarize_repair_schema_error(
+    exc: ValidationError,
+) -> str:
+    """
+    只输出字段位置与错误类型。
+    不包含源码、Prompt 或原始模型响应。
+    """
+    issues = []
+
+    for error in exc.errors(
+        include_input=False,
+        include_context=False,
+        include_url=False,
+    )[:6]:
+        location = ".".join(str(part) for part in error.get("loc", ()))
+
+        issues.append(
+            f"{(location or '<root>')[:120]}:" f"{error.get('type', 'unknown')}"
+        )
+
+    return "; ".join(issues) or "unknown_schema_error"
+
+
 @dataclass(frozen=True)
 class VerificationRepairResult:
 
@@ -525,6 +548,19 @@ class VerificationRepairService:
     
         Proof Strategy 可以改变，
         Verification Obligation 不能减少。
+        
+        Playwright Select/Option Repair 规则：
+        
+        - option 的 value 属性应使用 toHaveAttribute。
+        - select 的当前选中值应使用 toHaveValue。
+        - 用户切换选项必须执行 selectOption。
+        - 修正错误 Locator 或 Matcher 时，
+          保留测试名称、原有业务目标及行为验证。
+        - 不得用静态选项存在性替代真实分页切换。
+        - 继续验证分页重置、筛选条件保持和可观察结果。
+        - 如果当前 Patch Boundary 无法证明原有业务义务，
+          返回 repairable=false，不得删减断言绕过。
+
     """.strip()
 
     MIXED_INSTRUCTION = """
@@ -681,24 +717,65 @@ class VerificationRepairService:
 
             system_message = system_message + "\n\n" + self.MIXED_INSTRUCTION
 
-        raw_output = await self.model.complete(
-            system_message=(system_message),
-            user_message=(
-                json.dumps(
-                    payload,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            ),
+        original_request = json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
         )
 
-        try:
-            output = VerificationRepairOutput.model_validate_json(raw_output)
+        current_request = original_request
 
-        except ValidationError as exc:
-            raise VerificationRepairError(
-                "Verification Repair " "输出不满足 Schema"
-            ) from exc
+        # 最多两次调用：
+        # 一次正常生成，一次 Schema Correction。
+        # 不重复 Verification，不创建 Workspace。
+        for schema_attempt in range(2):
+            raw_output = await self.model.complete(
+                system_message=system_message,
+                user_message=current_request,
+            )
+
+            try:
+                output = VerificationRepairOutput.model_validate_json(raw_output)
+                break
+
+            except ValidationError as exc:
+                summary = summarize_repair_schema_error(exc)
+
+                if schema_attempt == 1:
+                    raise VerificationRepairError(
+                        "Verification Repair 输出不满足 Schema: " + summary
+                    ) from exc
+
+                # 不能使用无效输出作为下一轮 Patch Truth。
+                # 重新提供原始请求和结构化纠正反馈。
+                current_request = json.dumps(
+                    {
+                        "original_request": payload,
+                        "schema_correction": {
+                            "attempt": schema_attempt + 1,
+                            "errors": summary,
+                            "required_fields": {
+                                "task_id": proposal.task_id,
+                                "repairable": "boolean",
+                                "reason": "non-empty string",
+                                "changes": [
+                                    {
+                                        "relative_path": "string",
+                                        "after_content": "string",
+                                        "explanation": "string",
+                                    }
+                                ],
+                            },
+                            "constraints": (
+                                "只修复 JSON Schema，"
+                                "原 Patch Boundary、"
+                                "Verification Obligations、"
+                                "Effective Policy 保持不变。"
+                            ),
+                        },
+                    },
+                    ensure_ascii=False,
+                )
 
         if output.task_id != proposal.task_id:
             raise VerificationRepairError("Verification Repair " "Task ID 不一致")

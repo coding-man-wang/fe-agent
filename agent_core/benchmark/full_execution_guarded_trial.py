@@ -236,22 +236,44 @@ def _build_guarded_candidate(
     if not strategy_valid:
         return report("fallback", "strategy_schema_invalid")
     mandatory = protected
+
+    mandatory = protected
     current_paths = set(before_paths)
+
+    optional_paths = set(execution_surface.dependencies) | set(
+        execution_surface.references
+    )
+
+    budget_omitted = set(baseline.budget.skipped_files) & optional_paths
+
     mandatory_sources = initial_snapshot[2]
     allowed_missing = set(execution_surface.create_files)
+
     required_existing = {
         path
         for path in mandatory
         if mandatory_sources[path.replace("\\", "/")] != "__missing__"
     }
+
     absent_required = {
         path
         for path in mandatory
         if mandatory_sources[path.replace("\\", "/")] == "__missing__"
         and path not in allowed_missing
     }
-    if required_existing - current_paths or absent_required:
-        return report("blocked", "mandatory_context_missing")
+
+    missing_mandatory = (
+        required_existing - current_paths - budget_omitted
+    ) | absent_required
+
+    if missing_mandatory:
+        return report(
+            "blocked",
+            "mandatory_context_missing",
+        )
+
+    mandatory_in_context = mandatory & current_paths
+
     mandatory_in_context = mandatory & current_paths
 
     # 即使 D2-B 存在遗漏，D2-C 仍独立拒绝。

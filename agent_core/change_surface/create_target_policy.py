@@ -30,6 +30,55 @@ class CreateTargetPolicy:
         "tests/e2e",
     )
 
+    @staticmethod
+    def canonical_component_test_targets(
+        source_paths: set[str],
+    ) -> dict[str, str]:
+        """Repository-evidence-based unit targets, never Benchmark Oracle paths.
+
+        For directly located Vue views/components only. Ambiguous basenames are
+        excluded rather than granting a potentially wrong write target.
+        """
+        targets: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for source in sorted(source_paths):
+            path = PurePosixPath(source)
+            if (
+                path.parent.as_posix() not in {"src/views", "src/components"}
+                or path.suffix != ".vue"
+            ):
+                continue
+            key = path.stem.casefold()
+            target = f"tests/unit/{path.stem}.test.ts"
+            if key in targets:
+                ambiguous.add(key)
+            else:
+                targets[key] = target
+        return {key: path for key, path in targets.items() if key not in ambiguous}
+
+    @staticmethod
+    def canonicalize_component_test_create_path(
+        relative_path: str,
+        targets: dict[str, str],
+    ) -> str:
+        """Canonicalize only identifiable Vue test aliases; do not widen scope.
+
+        e.g. usersView.test.ts / UsersView.pagination.test.ts -> UsersView.test.ts.
+        A file unrelated to an evidenced component remains subject to the
+        existing CreateTargetPolicy checks (no guessed write permission).
+        """
+        path = PurePosixPath(relative_path)
+        if path.parent.as_posix() != "tests/unit" or not path.name.endswith(".test.ts"):
+            return relative_path
+
+        base = path.name[: -len(".test.ts")].casefold()
+        matches = {
+            target
+            for stem, target in targets.items()
+            if base == stem or base.startswith(stem + ".")
+        }
+        return next(iter(matches)) if len(matches) == 1 else relative_path
+
     @classmethod
     def discover_test_roots(
         cls,
