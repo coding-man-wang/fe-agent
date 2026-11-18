@@ -30,6 +30,10 @@ from agent_core.policies.model import (
     EffectivePolicy,
 )
 
+from agent_core.coding.verification_repair_coverage import (
+    inspect_repair_input_coverage,
+)
+
 
 class VerificationRepairError(ValueError):
     pass
@@ -702,6 +706,18 @@ class VerificationRepairService:
             repair_mode=repair_mode,
             correction_feedback=(correction_feedback or []),
         )
+
+        # D4-B: Fail-closed input coverage check.
+        coverage = inspect_repair_input_coverage(
+            verification=verification,
+            payload=payload,
+            truncate_details=self._truncate_details,
+        )
+
+        if not coverage["complete"]:
+            raise VerificationRepairError(
+                "Repair Input Coverage 不完整: " + ", ".join(coverage["issues"])
+            )
 
         system_message = self.SYSTEM_INSTRUCTION
 

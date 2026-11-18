@@ -23,6 +23,7 @@ from agent_core.benchmark.full_execution_context_shadow import (
 from agent_core.benchmark.shadow_audit import (
     JsonlShadowAuditStore,
 )
+from agent_core.context.model import TaskContextBundle
 
 logger = logging.getLogger(__name__)
 from agent_core.artifacts.store import JsonTaskArtifactStore
@@ -161,6 +162,11 @@ from agent_core.benchmark.verification_strategy import (
     VerificationStrategyPatchGenerator,
 )
 from agent_core.benchmark.obligation_evidence import ObligationEvidenceEnricher
+import json
+
+from agent_core.benchmark.d5_candidate_evidence import (
+    analyze_d5_candidates,
+)
 
 
 class FullExecutionBenchmarkError(RuntimeError):
@@ -1196,6 +1202,47 @@ class FullExecutionBenchmarkService:
                             ),
                         },
                     )
+
+                    # D5-A: diagnostic-only evidence.
+                    # Do not mutate Selection or final Context.
+                    if (
+                        self.context_shadow_observer is not None
+                        or self.context_guarded_preflight is not None
+                    ):
+                        try:
+                            d5_report = analyze_d5_candidates(
+                                selection_result=context_selection,
+                                final_bundle=bundle,
+                                surface=execution_surface,
+                                obligation_evidence_files=(
+                                    obligation_enrichment.added_files
+                                ),
+                            )
+
+                            d5_report["case_id"] = case.case_id
+
+                            # Store outside the execution Worktree.
+                            # No source or prompt content is persisted.
+                            report_path = (
+                                self.run_root
+                                / f"d5_candidate_evidence_{task.task_id}.json"
+                            )
+                            temporary = report_path.with_suffix(".tmp")
+
+                            temporary.write_text(
+                                json.dumps(
+                                    d5_report,
+                                    ensure_ascii=False,
+                                    indent=2,
+                                ),
+                                encoding="utf-8",
+                            )
+                            temporary.replace(report_path)
+
+                        except Exception:
+                            # Diagnostic must not grant or block
+                            # the original execution.
+                            logger.exception("D5 candidate diagnostic unavailable")
 
                     effective_policy = policy_resolver.resolve(
                         task=task,

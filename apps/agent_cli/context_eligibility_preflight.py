@@ -15,6 +15,95 @@ from agent_core.benchmark.context_eligibility_preflight import (
 from agent_core.change_surface.model import ResolvedChangeSurface
 
 
+def inspect_saved_run(
+    *,
+    run_id: str,
+    task_id: str,
+    fe_agent_root: Path,
+) -> dict:
+    if re.fullmatch(r"[0-9a-f]{32}", run_id) is None:
+        raise ValueError("Invalid run ID")
+
+    root = Path(fe_agent_root).resolve()
+    base = root / ".fe-agent" / "benchmark" / "full_execution"
+
+    run = FullExecutionRunRecord.model_validate_json(
+        (base / "runs" / f"{run_id}.json").read_text(encoding="utf-8-sig")
+    )
+
+    if run.run_id != run_id:
+        raise ValueError("Run ID mismatch")
+
+    identity = {
+        "run_id": run.run_id,
+        "case_id": run.case_id,
+        "base_commit_sha": run.base_commit_sha,
+        "task_id": task_id,
+    }
+
+    def inconclusive(reason: str) -> dict:
+        return {
+            **identity,
+            "version": "v1.4.9-P4-B-D3",
+            "status": "inconclusive",
+            "reason": reason,
+            "historical_advisory_only": True,
+            "applied": False,
+            "production_ready": False,
+        }
+
+    task = next(
+        (t for t in run.tasks if t.task_id == task_id),
+        None,
+    )
+
+    if task is None:
+        return inconclusive("task_record_missing")
+
+    guard = task.context_guarded_active or {}
+
+    if (
+        guard.get("status") not in {"fallback", "active"}
+        or guard.get("task_id") != task_id
+        or guard.get("case_id") != run.case_id
+        or guard.get("repository_revision") != run.base_commit_sha
+        or guard.get("baseline_files") != task.selected_context_files
+    ):
+        return inconclusive("context_provenance_unverified")
+
+    artifact = JsonTaskArtifactStore(
+        root=base / run_id / "harness" / "artifacts"
+    ).latest(
+        task_id=task_id,
+        artifact_type="change_surface",
+    )
+
+    if artifact is None:
+        return inconclusive("surface_artifact_missing")
+
+    if artifact.created_at < run.started_at:
+        return inconclusive("surface_not_created_in_this_run")
+
+    surface = ResolvedChangeSurface.model_validate(artifact.payload)
+
+    if surface.task_id != task_id:
+        return inconclusive("surface_task_mismatch")
+
+    report = analyze_context_eligibility(
+        context_files=task.selected_context_files,
+        surface=surface,
+        obligation_evidence_files=task.obligation_evidence_files,
+        verification_strategy=task.verification_strategy,
+    )
+
+    return {
+        **report,
+        **identity,
+        "surface_artifact_id": artifact.artifact_id,
+        "surface_created_at": artifact.created_at.isoformat(),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)

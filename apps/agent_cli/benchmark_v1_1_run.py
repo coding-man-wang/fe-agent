@@ -65,6 +65,17 @@ from agent_core.codebase.task_context_selection import (
     TaskContextSelectionService,
 )
 
+from apps.agent_cli.context_eligibility_preflight import (
+    inspect_saved_run,
+)
+from agent_core.benchmark.context_eligibility_preflight import (
+    recommend_experiment,
+)
+
+from agent_core.benchmark.execution_model import (
+    FullExecutionRunRecord,
+)
+
 load_dotenv()
 
 
@@ -148,7 +159,63 @@ def _parse_args():
         help="明确批准的目标仓库初始 Commit SHA",
     )
 
+    parser.add_argument(
+        "--eligibility-only",
+        action="store_true",
+        help="仅分析历史 Context 优化可行性，不执行 Benchmark",
+    )
+
+    parser.add_argument(
+        "--eligibility-run-id",
+        default=None,
+        help="待分析的历史 Full Execution Run ID",
+    )
+
     return parser.parse_args()
+
+
+def _run_eligibility_only(*, args, fe_agent_root: Path) -> None:
+    run_id = getattr(args, "eligibility_run_id", None)
+
+    if not run_id:
+        raise SystemExit("必须提供 --eligibility-run-id")
+
+    if not args.active_task_id:
+        raise SystemExit("必须提供 --active-task-id")
+
+    if not args.approved_revision:
+        raise SystemExit("必须提供 --approved-revision")
+
+    try:
+        report = inspect_saved_run(
+            run_id=run_id,
+            task_id=args.active_task_id,
+            fe_agent_root=fe_agent_root,
+        )
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"Eligibility 历史记录不可用: {exc}") from exc
+
+    # 历史证据必须属于指定实验。
+    if (
+        report.get("case_id") != args.case_id
+        or report.get("task_id") != args.active_task_id
+        or report.get("base_commit_sha") != args.approved_revision
+    ):
+        raise SystemExit("Eligibility 历史证据与 Case/Task/Revision 不匹配")
+
+    decision = recommend_experiment(report)
+
+    output = {
+        "mode": "eligibility_only",
+        "run_id": run_id,
+        "case_id": args.case_id,
+        "task_id": args.active_task_id,
+        "approved_revision": args.approved_revision,
+        "eligibility": report,
+        "recommendation": decision,
+    }
+
+    print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 def _checked_active_preflight(
@@ -367,6 +434,7 @@ async def _prepare_fresh(
             "Baseline Benchmark 未完成: "
             f"run_id={baseline.run_id}, stage={baseline.stage}, error={baseline.error}"
         )
+
     if not all(
         [
             baseline.task_plan,
@@ -729,6 +797,17 @@ def _write_ab_report(fe_agent_root, report):
     return path
 
 
+def _full_execution_accepted(
+    execution: FullExecutionRunRecord,
+) -> bool:
+    """Execution finished does not mean Benchmark accepted."""
+    return (
+        execution.status == "completed"
+        and execution.evaluation is not None
+        and execution.evaluation.status == "passed"
+    )
+
+
 async def main():
     args = _parse_args()
     fe_agent_root = Path(__file__).resolve().parents[2]
@@ -753,6 +832,17 @@ async def main():
         raise SystemExit(
             "Context 模式不能与其他模式同时使用；受控实验不能使用 --refresh-upstream"
         )
+
+    eligibility_only = getattr(args, "eligibility_only", False)
+    if eligibility_only:
+        _run_eligibility_only(
+            args=args,
+            fe_agent_root=fe_agent_root,
+        )
+        return
+
+    if getattr(args, "eligibility_run_id", None):
+        raise SystemExit("--eligibility-run-id 必须与 --eligibility-only 一起使用")
 
     # ======================================
     # v1.4.9-P4-B-D2-A
@@ -1029,11 +1119,14 @@ async def main():
             != identity
         ):
             raise SystemExit("Frozen experiment inputs changed during Active")
-    if guarded_mode and (
-        execution.status != "completed"
-        or execution.evaluation is None
-        or execution.evaluation.status != "passed"
-    ):
+
+    # P1-B: all Full Execution modes share the same
+    # final acceptance exit-code contract.
+    accepted = _full_execution_accepted(execution)
+
+    print("benchmark_acceptance=" + ("passed" if accepted else "failed"))
+
+    if not accepted:
         raise SystemExit(2)
 
 
