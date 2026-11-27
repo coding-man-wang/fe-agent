@@ -7,7 +7,8 @@ from typing import Iterable
 from pydantic import Field, ValidationError, model_validator
 
 from .catalog import CommittedCatalog
-from .contracts import Citation, Contract, InvestigationReport, InvestigationScope
+from .contracts import (Citation, CitationReference, Contract, InvestigationDraft,
+                        InvestigationReport, InvestigationScope)
 
 
 class EvidenceError(ValueError):
@@ -47,12 +48,17 @@ class EvidenceWindow(Contract):
                    sha256=catalog.digest(path), start_line=start, lines=lines)
 
 
-def parse_report(content: str) -> InvestigationReport:
+def _unwrap_report(content: str) -> str:
     # Unwrap only a complete fenced JSON document; never repair content.
     content = content.strip()
     match = re.fullmatch(r"```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```", content, re.I)
     if match:
         content = match.group(1).strip()
+    return content
+
+
+def parse_report(content: str) -> InvestigationReport:
+    content = _unwrap_report(content)
     try:
         return InvestigationReport.model_validate_json(content)
     except ValidationError as exc:
@@ -87,10 +93,18 @@ class EvidenceLedger:
             if obs.call_id in seen_call_ids:
                 raise EvidenceError("duplicate_call_id", "duplicated runtime observation")
             seen_call_ids.add(obs.call_id)
-            if not obs.success or obs.tool_name != "read_file":
+            if not obs.success or obs.tool_name not in {"read_file", "retrieve_evidence"}:
+                continue
+            data = obs.data if obs.tool_name == "read_file" else (obs.data.get("evidence") if isinstance(obs.data, dict) else None)
+            if obs.tool_name == "retrieve_evidence" and data is None:
+                continue
+            if isinstance(data, dict) and data.get("read_status") == "already_covered":
                 continue
             try:
-                data = obs.data
+                if not isinstance(data, dict):
+                    raise ValueError("invalid evidence payload")
+                if data.get("registered_evidence_id", obs.evidence_id) != obs.evidence_id:
+                    raise ValueError("evidence registration mismatch")
                 if not isinstance(obs.evidence_id, str) or not re.fullmatch(r"E[0-9]{3,6}", obs.evidence_id):
                     raise ValueError("missing runtime evidence id")
                 window = EvidenceWindow(evidence_id=obs.evidence_id, path=data["path"],
@@ -106,6 +120,23 @@ class EvidenceLedger:
                 raise EvidenceError("invalid_observation", "malformed successful read") from exc
             ledger.add(window)
         return ledger
+
+    def materialize(self, reference: CitationReference) -> Citation:
+        window = self._windows.get(reference.evidence_id)
+        end = reference.end_line if reference.end_line is not None else reference.line
+        if window is None or not (window.start_line <= reference.line <= end <= window.end_line):
+            raise EvidenceError("invalid_citation", "reference outside received evidence")
+        lines = window.lines[reference.line - window.start_line:end - window.start_line + 1]
+        quote = "\n".join(lines)
+        # Preserve the existing quote bounds and nonblank edge rules. Do not
+        # silently trim or widen the model-selected coordinates.
+        try:
+            citation = Citation(evidence_id=reference.evidence_id, path=window.path,
+                                line=reference.line, end_line=reference.end_line, quote=quote)
+        except ValidationError as exc:
+            raise EvidenceError("invalid_citation", "citation range exceeds quote constraints") from exc
+        self.validate(citation)
+        return citation
 
     def validate(self, citation: Citation):
         window = self._windows.get(citation.evidence_id)
@@ -142,10 +173,26 @@ class CompletionGate:
         self.candidate_target_ceiling = candidate_target_ceiling
 
     def validate(self, content: str, observations) -> InvestigationReport:
-        report = parse_report(content)
+        ledger = EvidenceLedger.from_observations(self.catalog, self.seeds, observations)
+        # Legacy complete reports remain accepted under their original strict
+        # validation. A malformed legacy quote cannot fall back to coordinates:
+        # the draft schema forbids path and quote, including mixed formats.
+        try:
+            draft = InvestigationDraft.model_validate_json(_unwrap_report(content))
+        except ValidationError:
+            report = parse_report(content)
+        else:
+            data = draft.model_dump(mode="json")
+            for key, entries in (("answers", draft.answers), ("observed_files", draft.observed_files)):
+                for raw, entry in zip(data[key], entries, strict=True):
+                    raw["citations"] = [ledger.materialize(ref).model_dump(mode="json")
+                                        for ref in entry.citations]
+            try:
+                report = InvestigationReport.model_validate(data)
+            except ValidationError as exc:
+                raise EvidenceError("invalid_report_schema", "materialized report violates contract") from exc
         if report.task_id != self.scope.task_id:
             raise EvidenceError("report_identity_mismatch", "task mismatch")
-        ledger = EvidenceLedger.from_observations(self.catalog, self.seeds, observations)
         criteria = {item.criterion_id: item for item in self.scope.criteria}
         answers = {item.criterion_id: item for item in report.answers}
         if len(answers) != len(report.answers) or answers.keys() != criteria.keys():
@@ -187,5 +234,5 @@ class CompletionGate:
             raise EvidenceError("missing_file_assessment", "every cited file needs a role assessment")
         return report
 
-    def __call__(self, content: str, observations) -> None:
-        self.validate(content, observations)
+    def __call__(self, content: str, observations) -> InvestigationReport:
+        return self.validate(content, observations)

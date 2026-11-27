@@ -16,6 +16,7 @@ class ChatRequest(BaseModel):
     input_items: list[dict[str, Any]] | None = None
     max_output_tokens: int | None = Field(default=None, ge=16)
     replay_reasoning: bool = False
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -24,6 +25,8 @@ class ChatResponse(BaseModel):
     model: str | None = None
     output_items: list[dict[str, Any]] | None = None
     response_status: str | None = None
+    incomplete_reason: str | None = None
+    reasoning_tokens: int | None = Field(default=None, ge=0, strict=True)
     # Provider-reported counts only. None means unavailable, never estimated.
     prompt_tokens: int | None = Field(default=None, ge=0, strict=True)
     completion_tokens: int | None = Field(default=None, ge=0, strict=True)

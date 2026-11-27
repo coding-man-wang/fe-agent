@@ -39,6 +39,13 @@ def evaluate(result: AgenticResult, oracle: EvaluationOracle | None = None) -> d
             "steps": result.runtime.steps, "llm_attempts": result.runtime.llm_attempts,
             "tool_calls": result.runtime.tool_calls, "no_progress_search_calls": no_progress_calls,
             "retrieval_calls": len(result.retrieval_events),
+            "retrieval_attempts": sum(o.tool_name == "retrieve_evidence" for o in result.runtime.observations),
+            "invalid_tool_arguments": sum(o.error_code == "invalid_arguments" for o in result.runtime.observations),
+            "evidence_reuse_calls": sum(1 for o in result.runtime.observations if o.success and isinstance(o.data, dict)
+                                        and (o.data.get("read_status") == "already_covered" or
+                                             isinstance(o.data.get("evidence"), dict) and o.data["evidence"].get("read_status") == "already_covered")),
+            "retrieve_and_read_calls": sum(1 for o in result.runtime.observations if o.success and o.tool_name == "retrieve_evidence" and o.evidence_id),
+            "unique_evidence_chars": result.unique_evidence_chars,
             "reported_tokens": result.runtime.reported_tokens,
             "usage_complete": result.runtime.usage_complete, "runtime_ms": result.runtime.duration_ms}
 

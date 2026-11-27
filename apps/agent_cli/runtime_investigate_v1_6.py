@@ -36,9 +36,14 @@ async def main() -> int:
     parser.add_argument("--semantic", action="store_true", help="send authorized code chunks to configured embedding provider")
     parser.add_argument("--budget", type=Path, help="RetrievalBudget JSON override")
     parser.add_argument("--runtime-config", type=Path, help="complete RuntimeConfig JSON, or partial overrides of v1.6 defaults")
+    parser.add_argument("--disable-scope-preflight", action="store_true", help="diagnostic only; final evidence gate remains enabled")
     parser.add_argument("--oracle", type=Path, help="offline expected evidence JSON; read only after all model runs")
     parser.add_argument("--output", type=Path, help="new local report file; never overwrite existing files")
+    parser.add_argument("--exploration-output-tokens", type=int, default=2048)
+    parser.add_argument("--reasoning-effort", choices=["low", "medium", "high"], help="opt-in; provider must support reasoning.effort")
     args = parser.parse_args()
+    if args.exploration_output_tokens < 16:
+        parser.error("exploration output tokens must be >= 16")
     if not 1 <= args.trials <= 10:
         parser.error("--trials must be between 1 and 10")
     if args.scope is not None:
@@ -96,17 +101,21 @@ async def main() -> int:
             async with asyncio.timeout(budget.setup_timeout_seconds):
                 initial_paths = await backend.initial_candidates(task=task, raw_requirement=scope.objective)
         setup_ms = round((perf_counter() - setup_started) * 1000, 2)
-        controller = AgenticRetrievalController(llm=llm, runtime_config=config)
+        controller = AgenticRetrievalController(llm=llm, runtime_config=config,
+                                                  exploration_output_tokens=args.exploration_output_tokens,
+                                                  reasoning_effort=args.reasoning_effort)
         for _ in range(args.trials):
             for mode in modes:
                 runs.append(await controller.run(backend=backend, scope=scope,
-                                                 initial_paths=initial_paths, mode=mode))
+                                                 initial_paths=initial_paths, mode=mode,
+                                                 scope_preflight=not args.disable_scope_preflight))
     # Read evaluation expectations only after every retrieval run is complete.
     oracle = EvaluationOracle.model_validate_json(args.oracle.read_text(encoding="utf-8")) if args.oracle else None
     metrics = [evaluate(run, oracle) for run in runs]
     report = {"revision": catalog.revision, "authorized_catalog_files": len(catalog.files),
               "excluded_tree_entries": catalog.excluded_count, "initial_candidates": list(initial_paths),
               "semantic_enabled": args.semantic, "setup_ms": setup_ms,
+              "initial_retrieval_diagnostics": backend.initial_diagnostics,
               "usage_note": "runtime tokens exclude embedding and initial retrieval setup; no hard billing guarantee",
               "runs": [run.model_dump(mode="json") for run in runs], "metrics": metrics,
               "summary": summarize(metrics)}

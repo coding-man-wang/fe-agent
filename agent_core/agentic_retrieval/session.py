@@ -9,7 +9,7 @@ from agent_core.runtime.model import Observation, RuntimeConfig
 from agent_core.tools.base import Tool
 from agent_core.tools.registry import ToolRegistry
 
-from .contracts import Contract, EvidenceGap, InvestigationScope, PathText, RetrievalBudget
+from .contracts import Contract, EvidenceGap, InvestigationScope, PathText, RetrievalBudget, RetrievalRequest
 from .evidence import EvidenceWindow
 from .retrieval import RetrievalBackend
 
@@ -53,6 +53,7 @@ class RetrievalSession:
         self.used_chars = 0
         self.seeds: tuple[EvidenceWindow, ...] = ()
         self.cache = {}
+        self.delivered: list[EvidenceWindow] = []
         # State is per run, never shared between modes or tasks. Serial tool
         # dispatch is required because admission and byte budgets are stateful.
         if config.max_parallel_tools != 1 or not config.compact_evidence:
@@ -114,7 +115,12 @@ class RetrievalSession:
     def is_covered(self, path, first, last):
         return all((path, i) in self.coverage for i in range(first, last + 1))
 
-    async def retrieve(self, gap: EvidenceGap):
+    async def retrieve(self, gap: EvidenceGap, *, read_if_unique: bool = False):
+        # Only dependency lookup needs a source anchor. Optional irrelevant
+        # source hints must not prevent a path or exact lookup.
+        if (gap.strategy in {"path", "exact", "hybrid", "symbol"}
+                or (gap.strategy == "auto" and not gap.query.startswith(("./", "../", "@/")) and gap.query != "*")) and gap.source_path not in self.admitted:
+            gap = gap.model_copy(update={"source_path": None})
         if gap.criterion_id not in self.criteria or (gap.source_path is not None and gap.source_path not in self.admitted):
             status = "unknown_criterion" if gap.criterion_id not in self.criteria else "source_not_admitted"
             self.retrieval_events.append({"criterion_id": gap.criterion_id,
@@ -179,6 +185,22 @@ class RetrievalSession:
                                       "status": output["status"],
                                       "admitted_paths": newly_admitted,
                                       "candidates": output["candidates"]})
+        # Only unique deterministic locators in the authorized retrieval result may be auto-read.
+        # Check uncapped locator list, not the admission-limited result list.
+        if (read_if_unique and len(hits) == 1 and len(output["candidates"]) == 1
+                and hits[0].channel in {"path", "symbol", "dependency"}):
+            hit = hits[0]
+            saved_coverage, saved_chars, saved_count = set(self.coverage), self.used_chars, len(self.delivered)
+            data = self.read(ReadWindowArgs(path=hit.path, start_line=hit.line,
+                                            end_line=hit.end_line or hit.line))
+            if data.get("success") is not False:
+                combined = {**output, "evidence": data}
+                if _fits(combined, "retrieve_evidence", self.config):
+                    return combined
+            # Do not register source that cannot be returned in the tool output.
+            self.coverage = saved_coverage
+            self.used_chars = saved_chars
+            del self.delivered[saved_count:]
         return output
 
     def read(self, args: ReadWindowArgs):
@@ -193,6 +215,20 @@ class RetrievalSession:
         if start > end:
             self.diagnostics.append({"code": "read_range_empty"})
             return {"success": False}
+        existing = [window for window in (*self.seeds, *self.delivered)
+                    if window.path == path and window.start_line <= end and window.end_line >= start]
+        references = [window.evidence_id for window in existing]
+        # Return the first uncovered contiguous interval. Later gaps are
+        # requested separately using next_line; no already-delivered lines.
+        missing = [i for i in range(start, end + 1) if (path, i) not in self.coverage]
+        if not missing:
+            return {"read_status": "already_covered", "path": path,
+                    "start_line": start, "end_line": end,
+                    "existing_evidence_ids": references,
+                    "next_line": end + 1 if end < len(lines) else None}
+        start = missing[0]
+        end = next((i - 1 for i in range(start, end + 1) if (path, i) in self.coverage), end)
+        evidence_id = f"E{len(self.delivered)+1:03d}"
         selected: list[str] = []
         added_chars = 0
         result = None
@@ -208,6 +244,7 @@ class RetrievalSession:
                     "numbered_lines": [{"line": i, "content": t}
                                        for i, t in enumerate(next_lines, start)],
                     "sha256": digest, "file_line_count": len(lines),
+                    "registered_evidence_id": evidence_id, "existing_evidence_ids": references,
                     "truncated": number < min(requested_end, len(lines)),
                     "next_line": number + 1 if number < len(lines) else None}
             if not _fits(data, "read_file", self.config):
@@ -220,24 +257,33 @@ class RetrievalSession:
             return {"success": False}
         self.coverage.update((path, i) for i in range(start, result["end_line"] + 1))
         self.used_chars += added_chars
+        self.delivered.append(EvidenceWindow.from_catalog(self.catalog, evidence_id, path,
+                                                          start, result["end_line"]))
         return result
 
 
 class RetrieveEvidenceTool(Tool):
     name = "retrieve_evidence"
     description = (
-        "Locate evidence for a fixed criterion. Returns authorized candidate paths and line ranges, not code. "
+        "Locate evidence by criterion_id and query. With read_if_unique=true, a unique deterministic match also returns committed source evidence. "
         "Use path for exact path, symbol for identifier, dependency for a known import specifier "
         "or '*' (all direct imports, source_path required), exact for literal text, hybrid for semantic search "
-        "when enabled, auto for deterministic-first routing. Then read_file. Never search out-of-scope questions."
+        "when enabled, auto for deterministic-first routing. Read only if source evidence was not already returned. Never search out-of-scope questions."
     )
-    args_schema = EvidenceGap
+    args_schema = RetrievalRequest
 
     def __init__(self, session: RetrievalSession):
         self.session = session
 
     async def execute(self, arguments):
-        return await self.session.retrieve(self.args_schema.model_validate(arguments, strict=True))
+        req = self.args_schema.model_validate(arguments, strict=True)
+        criterion = next((c for c in self.session.scope.criteria if c.criterion_id == req.criterion_id), None)
+        if criterion is None:
+            return {"status": "unknown_criterion", "candidates": []}
+        gap = EvidenceGap(criterion_id=req.criterion_id, question=criterion.question,
+                          reason=req.reason or "additional code evidence required",
+                          strategy=req.strategy, query=req.query, source_path=req.source_path)
+        return await self.session.retrieve(gap, read_if_unique=req.read_if_unique)
 
 
 class ReadEvidenceTool(Tool):
@@ -283,13 +329,14 @@ class ProgressTracker:
         for obs in new:
             if not obs.success or not isinstance(obs.data, dict):
                 continue
-            if obs.tool_name == "read_file":
-                for line in range(obs.data["start_line"], obs.data["end_line"] + 1):
-                    key = (obs.data["path"], line)
+            data = obs.data if obs.tool_name == "read_file" else obs.data.get("evidence", {})
+            if isinstance(data, dict) and "lines" in data:
+                for line in range(data["start_line"], data["end_line"] + 1):
+                    key = (data["path"], line)
                     if key not in self.coverage:
                         self.coverage.add(key)
                         progress = True
-            elif obs.tool_name == "retrieve_evidence":
+            if obs.tool_name == "retrieve_evidence":
                 for item in obs.data.get("candidates", []):
                     key = (item["path"], item["start_line"], item["end_line"])
                     if key not in self.locators and item.get("new_locator"):

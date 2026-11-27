@@ -78,6 +78,8 @@ class OpenAILLM(LLM):
                 kwargs['tool_choice'] = request.tool_choice
             if request.max_output_tokens is not None:
                 kwargs['max_output_tokens'] = request.max_output_tokens
+            if request.reasoning_effort is not None:
+                kwargs['reasoning'] = {'effort': request.reasoning_effort}
             if request.input_items is not None:
                 kwargs['store'] = False
                 if request.replay_reasoning:
@@ -99,12 +101,16 @@ class OpenAILLM(LLM):
                     )
 
             usage = getattr(response, "usage", None)
+            incomplete_reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            output_details = getattr(usage, "output_tokens_details", None)
             return ChatResponse(
                 content=response.output_text or "",
                 tool_calls=tool_calls,
                 output_items=[item.model_dump(mode="json", exclude_none=True)
                               for item in response.output] if request.input_items is not None else None,
                 response_status=getattr(response, "status", None),
+                incomplete_reason=incomplete_reason if isinstance(incomplete_reason, str) else None,
+                reasoning_tokens=_reported_tokens(output_details, "reasoning_tokens"),
                 model=getattr(response, "model", None) or self.model,
                 prompt_tokens=_reported_tokens(usage, "input_tokens"),
                 completion_tokens=_reported_tokens(usage, "output_tokens"),

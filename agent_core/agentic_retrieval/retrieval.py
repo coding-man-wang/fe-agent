@@ -18,7 +18,7 @@ from agent_core.codebase.chunker import CodeChunker
 from agent_core.codebase.hybrid_relevance import HybridRelevantFileSelector
 from agent_core.codebase.task_retrieval import TaskRetrievalService
 
-from .catalog import CommittedCatalog
+from .catalog import CommittedCatalog, safe_path
 from .contracts import Contract, EvidenceGap, RetrievalBudget
 
 
@@ -29,9 +29,59 @@ class Candidate(Contract):
     channel: Literal["path", "symbol", "dependency", "exact", "hybrid"]
 
 
+def identifiers_in(query: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", query)
+    ignored = {"interface", "type", "const", "function", "export", "status", "the", "of", "and", "in", "for", "params", "query", "definition"}
+    return list(dict.fromkeys(t for t in tokens if len(t) > 1 and t.lower() not in ignored))
+
+
+def authorized_path_matches(query: str, paths) -> list[str]:
+    """Return every actual authorized match, not just the top ranked one."""
+    query = query.strip()
+    if "\\" in query or any(part == ".." for part in re.split(r"[/\s]+", query)) or query.startswith("/") or re.match(r"^[A-Za-z]:", query):
+        return []
+    if query in paths and safe_path(query):
+        return [query]
+    # Extract path-shaped tokens, never resolve against host filesystem.
+    candidates = [query] if safe_path(query) and not any(c.isspace() for c in query) else []
+    candidates.extend(t for t in re.findall(r"[A-Za-z0-9_@./-]+", query)
+                      if "/" in t and safe_path(t))
+    suffixes = (".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs", ".json")
+    results = []
+    for stem in dict.fromkeys(candidates):
+        # Do not normalize traversal or absolute paths into valid paths.
+        if not safe_path(stem):
+            continue
+        variants = {stem, *(stem + ext for ext in suffixes),
+                    *(stem + "/index" + ext for ext in suffixes)}
+        results.extend(path for path in paths if path in variants)
+    return sorted(set(results))
+
+
 class NoSemantic:
     async def search(self, query, *, top_k=5):
         raise RuntimeError("semantic retrieval was not enabled")
+
+
+class _TracedExactSearcher:
+    def __init__(self, searcher, events):
+        self.searcher, self.events = searcher, events
+
+    def search(self, index, query, **kwargs):
+        result = self.searcher.search(index, query, **kwargs)
+        self.events.append({"query": query, "channel": "exact", "returned": len(result.results),
+                            "matched_files": getattr(result, "matched_files", None)})
+        return result
+
+
+class _TracedSemanticSearcher:
+    def __init__(self, searcher, events):
+        self.searcher, self.events = searcher, events
+
+    async def search(self, query, **kwargs):
+        result = await self.searcher.search(query, **kwargs)
+        self.events.append({"query": query, "channel": "semantic", "returned": len(result.results)})
+        return result
 
 
 class RetrievalBackend:
@@ -52,6 +102,7 @@ class RetrievalBackend:
         self._symbol_attempted = False
         self.semantic = None
         self.diagnostics: list[str] = []
+        self.initial_diagnostics: list[dict] = []
 
     def reset_runtime_caches(self):
         """Reuse the embedding index, not query/graph warmup across measured runs."""
@@ -80,20 +131,44 @@ class RetrievalBackend:
         # Exactly the existing TaskRetrievalService for the standalone CLI.
         # A Harness bundle already has its own richer v1.4.9 selection; do not
         # rerun it there. Rerank is not used in the dynamic inner loop.
+        query_events: list[dict] = []
         service = TaskRetrievalService(
-            exact_searcher=self.exact,
-            semantic_searcher=self.semantic or NoSemantic(),
+            exact_searcher=_TracedExactSearcher(self.exact, query_events),
+            semantic_searcher=_TracedSemanticSearcher(self.semantic or NoSemantic(), query_events),
             hybrid_retriever=self.hybrid,
             selector=HybridRelevantFileSelector(),
             max_files=self.budget.initial_max_files,
             max_total_bytes=self.budget.max_evidence_chars * 4,
         )
-        selection = await service.retrieve(task=task, index=self.index,
-                                           raw_requirement=raw_requirement,
-                                           requirement_spec=requirement,
+        specs = service.build_query_specs(task=task, raw_requirement=raw_requirement,
+                                          requirement_spec=requirement)
+        # Explicit, bounded identifiers from the task; never use oracle paths.
+        text = " ".join([task.objective, *task.investigation_questions])
+        identifiers = identifiers_in(text)
+        paths = []
+        for identifier in identifiers[:16]:
+            gap = EvidenceGap(criterion_id="initial", question="Initial retrieval",
+                              reason="task identifier", strategy="symbol", query=identifier)
+            hits = self._symbols(gap)
+            # Prefer actual symbol definitions, then exact filenames. No substring
+            # match on arbitrary names in this deterministic seed supplement.
+            if not hits:
+                hits = [Candidate(path=path, channel="path") for path in self.catalog.files
+                        if Path(path).stem == identifier]
+            paths.extend(hit.path for hit in hits if hit.path in self.catalog.files)
+        selection = await service.retrieve(task=task, index=self.index, query_specs=specs,
                                            semantic_enabled=self.semantic is not None)
-        return tuple(dict.fromkeys(item.relative_path for item in selection.selected_files
-                                   if item.relative_path in self.catalog.files))
+        baseline_paths = [item.relative_path for item in selection.selected_files
+                          if item.relative_path in self.catalog.files]
+        # Keep the baseline first; use task symbols to fill unused slots.
+        selected = tuple(dict.fromkeys([*baseline_paths, *paths]))[:self.budget.initial_max_files]
+        self.initial_diagnostics = [{"queries": [q.text for q in specs],
+                                     "identifier_queries": identifiers[:16],
+                                     "query_events": query_events,
+                                     "baseline_paths": baseline_paths,
+                                     "symbol_paths": list(dict.fromkeys(paths)),
+                                     "selected_paths": list(selected)}]
+        return selected
 
     def _dependency(self, gap: EvidenceGap) -> list[Candidate]:
         if not gap.source_path or gap.source_path not in self.catalog.files:
@@ -172,8 +247,10 @@ class RetrievalBackend:
         query = gap.query
         limit = min(60, self.budget.max_candidates_per_call * 4)
         candidates: list[Candidate] = []
-        if strategy in {"path", "auto"} and query in self.catalog.files:
-            candidates = [Candidate(path=query, channel="path")]
+        normalized_tokens: list[str] = []
+        path_hits = authorized_path_matches(query, self.catalog.files) if strategy in {"path", "auto"} else []
+        if path_hits:
+            candidates = [Candidate(path=path, channel="path") for path in path_hits]
         elif strategy == "path":
             return []
         elif strategy == "dependency" or (strategy == "auto" and gap.source_path
@@ -182,14 +259,27 @@ class RetrievalBackend:
         elif strategy == "symbol" or (strategy == "auto" and re.fullmatch(r"[A-Za-z_$][\w$]*", query)):
             candidates = self._symbols(gap)
             if not candidates:
+                normalized_tokens = identifiers_in(query)[:4]
+                for token in normalized_tokens:
+                    if token != query:
+                        candidates.extend(self._symbols(gap.model_copy(update={"query": token})))
+            if not candidates:
                 candidates = self._exact_candidates(self._lexical(query, limit))
         elif strategy == "exact":
             candidates = self._exact_candidates(self._lexical(query, limit))
         elif strategy == "hybrid":
             candidates = await self._hybrid(query, self._lexical(query, limit), limit)
+            if not candidates:
+                normalized_tokens = identifiers_in(query)[:4]
+                for token in normalized_tokens:
+                    candidates.extend(self._symbols(gap.model_copy(update={"query": token})))
         else:
             lexical = self._lexical(query, limit)
             candidates = self._exact_candidates(lexical)
+            if not candidates:
+                normalized_tokens = identifiers_in(query)[:4]
+                for token in normalized_tokens:
+                    candidates.extend(self._symbols(gap.model_copy(update={"query": token})))
             if not candidates and self.semantic is not None:
                 candidates = await self._hybrid(query, lexical, limit)
         # Stable deduplication and range checking; all output is a locator, not
@@ -207,4 +297,7 @@ class RetrievalBackend:
                 continue
             normalized = item.model_copy(update={"end_line": end_line})
             unique.setdefault((item.path, item.line), normalized)
-        return list(unique.values())[:limit]
+        if normalized_tokens and "query_normalization_used" not in self.diagnostics:
+            self.diagnostics.append("query_normalization_used")
+        values = list(unique.values())
+        return values if strategy in {"path", "symbol", "dependency", "auto"} else values[:limit]

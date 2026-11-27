@@ -402,7 +402,8 @@ def test_no_progress_triggers_finalization(catalog, scope):
         response(retrieve_call("x2", strategy="exact", query="__missing_two__", source=None)),
         response(content=json.dumps(report(unresolved=True)))])
     assert result.runtime.status == "blocked" and result.validation_code == "unresolved_criteria"
-    assert llm.requests[-1].tool_choice == "none"
+    assert llm.requests[-1].tools is None  # v1.6.1 independent, tool-free final request
+    assert llm.requests[-1].tool_choice is None
     assert any(e.event == "finalization_started" and e.data["reason"] == "no_retrieval_progress"
                for e in result.runtime.trace)
 

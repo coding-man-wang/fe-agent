@@ -82,6 +82,23 @@ class EvidenceGap(Contract):
         return self
 
 
+class RetrievalRequest(Contract):
+    """Minimal tool contract; scope owns the actual criterion question."""
+    criterion_id: Identifier
+    query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
+    strategy: Strategy = "auto"
+    source_path: PathText | None = None
+    reason: Text | None = None
+    question: Text | None = None  # legacy callers; ignored when rebuilding the gap
+    read_if_unique: bool = False
+
+    @model_validator(mode="after")
+    def validate_dependency(self):
+        if self.strategy == "dependency" and not self.source_path:
+            raise ValueError("dependency lookup requires source_path")
+        return self
+
+
 class Citation(Contract):
     evidence_id: Annotated[str, StringConstraints(pattern=r"^[SE][0-9]{3,6}$")]
     path: PathText
@@ -128,6 +145,33 @@ class InvestigationReport(Contract):
     answers: tuple[CriterionAnswer, ...] = Field(min_length=1, max_length=24)
     observed_files: tuple[FileAssessment, ...] = Field(default=(), max_length=60)
     limitations: tuple[Text, ...] = Field(default=(), max_length=30)
+
+
+class CitationReference(Contract):
+    """Model selects received evidence coordinates; host supplies path and quote."""
+    evidence_id: Annotated[str, StringConstraints(pattern=r"^[SE][0-9]{3,6}$")]
+    line: int = Field(ge=1, strict=True)
+    end_line: int | None = Field(default=None, ge=1, strict=True)
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        end = self.end_line if self.end_line is not None else self.line
+        if end < self.line or end - self.line >= 100:
+            raise ValueError("invalid citation range")
+        return self
+
+
+class DraftCriterionAnswer(CriterionAnswer):
+    citations: tuple[CitationReference, ...] = Field(default=(), max_length=12)
+
+
+class DraftFileAssessment(FileAssessment):
+    citations: tuple[CitationReference, ...] = Field(min_length=1, max_length=12)
+
+
+class InvestigationDraft(InvestigationReport):
+    answers: tuple[DraftCriterionAnswer, ...] = Field(min_length=1, max_length=24)
+    observed_files: tuple[DraftFileAssessment, ...] = Field(default=(), max_length=60)
 
 
 class RetrievalBudget(Contract):
