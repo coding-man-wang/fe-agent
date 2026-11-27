@@ -206,6 +206,11 @@ class ChangeSurfaceResolver:
                     creatable_test_roots=(creatable_test_roots),
                 )
 
+                # v1.6: check persisted read-only provenance AFTER existing
+                # role normalization and Surface validation, before return.
+                from agent_core.agentic_retrieval.write_guard import assert_read_only_paths
+                assert_read_only_paths(surface, upstream_investigations)
+
                 return surface
 
             except (

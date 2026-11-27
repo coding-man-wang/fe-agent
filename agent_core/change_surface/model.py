@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 ObservedFileRole = Literal[
     "candidate_target",
@@ -41,11 +42,23 @@ class InvestigationArtifact(BaseModel):
     findings: list[str] = Field(default_factory=list)
     unresolved_questions: list[str] = Field(default_factory=list)
 
+    # v1.6 host-owned read-only provenance. Hidden from the legacy model
+    # schema and omitted when empty, preserving legacy artifact dumps.
+    read_only_paths: SkipJsonSchema[list[str]] = Field(
+        default_factory=list, exclude_if=lambda paths: not paths
+    )
+
     @model_validator(mode="after")
     def validate_unique_files(self) -> "InvestigationArtifact":
         paths = [item.relative_path for item in self.observed_files]
         if len(paths) != len(set(paths)):
             raise ValueError("InvestigationArtifact observed_files 中存在重复文件")
+        denied = set(self.read_only_paths)
+        if len(denied) != len(self.read_only_paths) or not denied <= set(paths):
+            raise ValueError("Invalid v1.6 read-only provenance")
+        if any(item.relative_path in denied and item.observed_role in {"candidate_target", "test"}
+               for item in self.observed_files):
+            raise ValueError("Read-only evidence cannot have a write-bearing role")
         return self
 
 

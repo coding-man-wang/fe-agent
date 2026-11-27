@@ -23,6 +23,8 @@ class AgentRuntime:
         dispatcher: ToolDispatcher,
         config: RuntimeConfig,
         final_validator: FinalValidator | None = None,
+        finalize_when: Callable[[tuple[Observation, ...]], str | None] | None = None,
+        finalization_message: str | None = None,
     ):
         if dispatcher.config != config:
             raise ValueError("dispatcher and runtime must share the same policy")
@@ -30,6 +32,8 @@ class AgentRuntime:
         self.dispatcher = dispatcher
         self.config = config
         self.final_validator = final_validator
+        self.finalize_when = finalize_when
+        self.finalization_message = finalization_message
 
     async def run(self, *, system_prompt: str, user_input: str) -> RuntimeResult:
         config = self.config
@@ -66,9 +70,16 @@ class AgentRuntime:
                     # Finalization Policy
                     # ==================================
 
-                    force_final = config.force_finalization and (
-                        step == config.max_steps
-                        or result.tool_calls >= config.max_tool_calls
+                    # v1.6 optional convergence policy; default v1.5 behavior is unchanged.
+                    policy_final_reason = (
+                        self.finalize_when(tuple(result.observations))
+                        if self.finalize_when is not None else None
+                    )
+                    force_final = bool(policy_final_reason) or (
+                        config.force_finalization and (
+                            step == config.max_steps
+                            or result.tool_calls >= config.max_tool_calls
+                        )
                     )
 
                     request_items = items
@@ -78,7 +89,7 @@ class AgentRuntime:
                             *items,
                             {
                                 "role": "user",
-                                "content": (
+                                "content": self.finalization_message or (
                                     "系统调查预算已经耗尽。"
                                     "现在进入最终报告阶段。"
                                     "不得再调用工具。"
@@ -116,7 +127,7 @@ class AgentRuntime:
                     if force_final:
                         trace(
                             "finalization_started",
-                            reason=(
+                            reason=policy_final_reason or (
                                 "tool_budget_exhausted"
                                 if result.tool_calls >= config.max_tool_calls
                                 else "last_model_step"

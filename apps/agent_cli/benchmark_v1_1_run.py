@@ -458,9 +458,18 @@ async def _prepare_fresh(
     harness_root = (
         fe_agent_root / ".fe-agent" / "benchmark" / "harness" / baseline.run_id
     )
+    # v1.6 opt-in for fresh investigation only; historical prepared inputs
+    # remain immutable and the default environment keeps the original builder.
+    from agent_core.agentic_retrieval.integration import maybe_agentic_builder
+
     coordinator = HarnessV1Coordinator(
         store=JsonTaskArtifactStore(root=harness_root / "artifacts"),
-        investigation_builder=InvestigationArtifactBuilder(llm=llm),
+        investigation_builder=maybe_agentic_builder(
+            baseline_builder=InvestigationArtifactBuilder(llm=llm),
+            repository_root=benchmark_repository,
+            expected_revision=baseline.base_commit_sha,
+            report_path=harness_root / "agentic-retrieval-v1_6.jsonl",
+        ),
         surface_resolver=ChangeSurfaceResolver(llm=llm),
         trace_store=JsonlHarnessTraceStore(path=harness_root / "trace.jsonl"),
     )
