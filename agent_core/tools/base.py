@@ -21,7 +21,7 @@ class Tool(ABC):
 
     @property
     @abstractmethod
-    def args_schema(self) -> type(BaseModel):
+    def args_schema(self) -> type[BaseModel]:
         pass
 
     def to_schema(self) -> dict[str, Any]:
@@ -29,5 +29,6 @@ class Tool(ABC):
             "type": "function",
             "name": self.name,
             "description": self.description,
-            "parameters_schema": self.args_schema.model_json_schema(),
+            "parameters": self.args_schema.model_json_schema(),
+            "strict": False,
         }

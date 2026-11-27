@@ -13,12 +13,17 @@ class ChatRequest(BaseModel):
     temperature: float | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
+    input_items: list[dict[str, Any]] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=16)
+    replay_reasoning: bool = False
 
 
 class ChatResponse(BaseModel):
     content: str
     tool_calls: list[ToolCall] = Field(default_factory=list)
     model: str | None = None
+    output_items: list[dict[str, Any]] | None = None
+    response_status: str | None = None
     # Provider-reported counts only. None means unavailable, never estimated.
     prompt_tokens: int | None = Field(default=None, ge=0, strict=True)
     completion_tokens: int | None = Field(default=None, ge=0, strict=True)

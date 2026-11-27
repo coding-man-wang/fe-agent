@@ -11,7 +11,7 @@ from agent_core.llm.model import Message
 class AgentState(BaseModel):
     run_id: str = Field(default_factory=lambda: str(uuid4()))
 
-    status: Literal["create", "running", "completed", "failed"] = "created"
+    status: Literal["created", "running", "completed", "failed"] = "created"
 
     step: int = 0
 

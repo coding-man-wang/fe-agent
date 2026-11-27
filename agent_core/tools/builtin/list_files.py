@@ -21,7 +21,7 @@ class ListFileTool(Tool):
         return "列出指定目录下的文件和目录"
 
     @property
-    def args_schema(self) -> type(ListFileInput):
+    def args_schema(self) -> type[ListFileInput]:
         return ListFileInput
 
     async def execute(self, arguments: dict[str, Any]) -> Any:
@@ -36,7 +36,7 @@ class ListFileTool(Tool):
             if not directory.exists():
                 return {
                     "success": False,
-                    "error": f"目录不存在: {path}",
+                    "error": f"目录不存在: {input_data.path}",
                 }
 
             items = []

@@ -1,5 +1,7 @@
 from time import perf_counter
 
+from agent_core.runtime.protocol import replay_items, function_output
+
 from agent_core.agent.config import AgentConfig
 from agent_core.agent.errors import LLMError, MaxStepsError
 from agent_core.agent.model import ToolResult, ToolCall
@@ -93,6 +95,7 @@ class Agent:
         )
 
         state.status = "running"
+        input_items = [{"role": "user", "content": user_input}]
 
         state.add_trace("run_started")
 
@@ -113,6 +116,7 @@ class Agent:
                 try:
                     request = ChatRequest(
                         messages=state.messages,
+                        input_items=input_items,
                         tools=[
                             tool.to_schema() for tool in self.tool_registry.list_tools()
                         ],
@@ -165,6 +169,8 @@ class Agent:
 
                 print("LLM Response:", response)
 
+                if response.response_status not in (None, "completed"):
+                    raise LLMError("Incomplete model response")
                 if not response.tool_calls:
                     state.status = "completed"
 
@@ -176,11 +182,9 @@ class Agent:
                         print(event.model_dump())
                     return response
 
+                input_items.extend(replay_items(response))
                 state.messages.append(
-                    Message(
-                        role="assistant",
-                        content=response.content,
-                    )
+                    Message(role="assistant", content=response.content)
                 )
 
                 for tool_call in response.tool_calls:
@@ -188,12 +192,9 @@ class Agent:
 
                     tool_result = await self._execute_tool(tool_call, state)
 
-                    state.messages.append(
-                        Message(
-                            role="user",
-                            content=str(tool_result.content),
-                        )
-                    )
+                    input_items.append(function_output(
+                        tool_call.id, tool_result.model_dump_json()
+                    ))
             raise MaxStepsError(self.config.max_steps)
         except Exception as e:
             state.status = "failed"

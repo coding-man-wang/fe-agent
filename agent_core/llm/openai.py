@@ -70,11 +70,19 @@ class OpenAILLM(LLM):
                 for message in request.messages
             ]
 
-            response = await self.client.responses.create(
-                model=self.model,
-                input=input_messages,
-                tools=request.tools,
-            )
+            # Preserve the ordinary text-only request path for existing workflows.
+            kwargs = dict(model=self.model,
+                          input=request.input_items if request.input_items is not None else input_messages,
+                          tools=request.tools)
+            if request.tool_choice is not None:
+                kwargs['tool_choice'] = request.tool_choice
+            if request.max_output_tokens is not None:
+                kwargs['max_output_tokens'] = request.max_output_tokens
+            if request.input_items is not None:
+                kwargs['store'] = False
+                if request.replay_reasoning:
+                    kwargs['include'] = ['reasoning.encrypted_content']
+            response = await self.client.responses.create(**kwargs)
 
             tool_calls = []
 
@@ -92,8 +100,11 @@ class OpenAILLM(LLM):
 
             usage = getattr(response, "usage", None)
             return ChatResponse(
-                content=response.output_text,
+                content=response.output_text or "",
                 tool_calls=tool_calls,
+                output_items=[item.model_dump(mode="json", exclude_none=True)
+                              for item in response.output] if request.input_items is not None else None,
+                response_status=getattr(response, "status", None),
                 model=getattr(response, "model", None) or self.model,
                 prompt_tokens=_reported_tokens(usage, "input_tokens"),
                 completion_tokens=_reported_tokens(usage, "output_tokens"),
