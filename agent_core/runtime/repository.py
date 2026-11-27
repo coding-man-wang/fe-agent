@@ -310,11 +310,29 @@ def validate_investigation(
     # 4. Build Evidence Index
     # ==================================
 
-    reads = {
-        observation.call_id: observation.data
-        for observation in observations
-        if (observation.success and observation.tool_name == "read_file")
-    }
+    # ==================================
+    # Evidence Reference Index
+    # ==================================
+
+    reads = {}
+
+    for observation in observations:
+
+        if not observation.success:
+            continue
+
+        if observation.tool_name != "read_file":
+            continue
+
+        reference_id = observation.evidence_id or observation.call_id
+
+        if reference_id in reads:
+            raise InvestigationValidationError(
+                code="duplicate_evidence_id",
+                message="Duplicate evidence reference.",
+            )
+
+        reads[reference_id] = observation.data
 
     # ==================================
     # 5. Citation Validation

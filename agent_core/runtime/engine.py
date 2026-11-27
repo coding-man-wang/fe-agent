@@ -43,6 +43,7 @@ class AgentRuntime:
         ]
         seen_ids: set[str] = set()
         actions: Counter[str] = Counter()
+        evidence_sequence = 0
 
         def trace(event: str, **data):
             result.trace.append(RuntimeEvent(step=result.steps, event=event, data=data))
@@ -60,9 +61,49 @@ class AgentRuntime:
                 for step in range(1, config.max_steps + 1):
                     if result.reported_tokens >= config.max_total_tokens:
                         return finish("blocked", "token_budget_exhausted")
+
+                    # ==================================
+                    # Finalization Policy
+                    # ==================================
+
+                    force_final = config.force_finalization and (
+                        step == config.max_steps
+                        or result.tool_calls >= config.max_tool_calls
+                    )
+
+                    request_items = items
+
+                    if force_final:
+                        request_items = [
+                            *items,
+                            {
+                                "role": "user",
+                                "content": (
+                                    "系统调查预算已经耗尽。"
+                                    "现在进入最终报告阶段。"
+                                    "不得再调用工具。"
+                                    "仅基于已有成功读取的代码证据，"
+                                    "输出符合 Schema 的 JSON 调查报告。"
+                                    "无法确认的必要证据写入 "
+                                    "unresolved_questions。"
+                                ),
+                            },
+                        ]
+
+                    tool_choice = (
+                        "none"
+                        if force_final and schemas
+                        else "auto" if schemas else None
+                    )
+
                     size = len(
                         json.dumps(
-                            {"input": items, "tools": schemas}, ensure_ascii=False
+                            {
+                                "input": request_items,
+                                "tools": schemas,
+                                "tool_choice": tool_choice,
+                            },
+                            ensure_ascii=False,
                         ).encode()
                     )
                     if size > config.max_input_bytes:
@@ -71,16 +112,36 @@ class AgentRuntime:
                     if remaining < 16:
                         return finish("blocked", "token_budget_exhausted")
                     result.steps = step
+
+                    if force_final:
+                        trace(
+                            "finalization_started",
+                            reason=(
+                                "tool_budget_exhausted"
+                                if result.tool_calls >= config.max_tool_calls
+                                else "last_model_step"
+                            ),
+                        )
+
                     trace("llm_started", input_bytes=size)
                     request = ChatRequest(
                         messages=[
-                            Message(role="system", content=system_prompt),
-                            Message(role="user", content=user_input),
+                            Message(
+                                role="system",
+                                content=system_prompt,
+                            ),
+                            Message(
+                                role="user",
+                                content=user_input,
+                            ),
                         ],
-                        input_items=items,
+                        input_items=request_items,
                         tools=schemas or None,
-                        tool_choice="auto" if schemas else None,
-                        max_output_tokens=min(config.max_output_tokens, remaining),
+                        tool_choice=tool_choice,
+                        max_output_tokens=min(
+                            config.max_output_tokens,
+                            remaining,
+                        ),
                         replay_reasoning=config.replay_reasoning,
                     )
 
@@ -130,6 +191,18 @@ class AgentRuntime:
                     if response.response_status not in (None, "completed"):
                         return finish("blocked", "incomplete_model_response")
                     calls = response.tool_calls
+
+                    if force_final and calls:
+                        trace(
+                            "finalization_violation",
+                            tool_call_count=len(calls),
+                        )
+
+                        return finish(
+                            "blocked",
+                            "tool_calls_during_finalization",
+                        )
+
                     if not calls:
                         if not response.content.strip():
                             return finish("blocked", "empty_final_output")
@@ -200,19 +273,55 @@ class AgentRuntime:
                     seen_ids.update(ids)
                     actions = next_actions
                     result.tool_calls += len(calls)
+                    # ==================================
+                    # Tool Batch Execution
+                    # ==================================
+
                     observations = await self.dispatcher.execute_batch(calls)
+
+                    # ==================================
+                    # Evidence Identity
+                    # ==================================
+
+                    for observation in observations:
+
+                        if (
+                            config.compact_evidence
+                            and observation.success
+                            and observation.tool_name == "read_file"
+                        ):
+                            evidence_sequence += 1
+
+                            observation.evidence_id = f"E{evidence_sequence:03d}"
+
+                    # ==================================
+                    # Observation Recording
+                    # ==================================
+
                     result.observations.extend(observations)
+
+                    # ==================================
+                    # Observation Feedback
+                    # ==================================
+
                     for observation in observations:
                         trace(
                             "tool_result",
                             call_id=observation.call_id,
+                            evidence_id=observation.evidence_id,
                             tool=observation.tool_name,
                             success=observation.success,
                             error_code=observation.error_code,
                             duration_ms=observation.duration_ms,
                         )
+
+                        output = observation.output()
+
                         items.append(
-                            function_output(observation.call_id, observation.output())
+                            function_output(
+                                observation.call_id,
+                                output,
+                            )
                         )
                 return finish("blocked", "step_budget_exhausted")
         except TimeoutError:
